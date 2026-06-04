@@ -7,6 +7,7 @@ param containerAppName string = 'ca-articletts'
 param image string = 'mcr.microsoft.com/k8se/quickstart:latest'
 param speechAccountName string = 'sp${take(uniqueString(subscription().id, resourceGroup().id), 20)}'
 param speechCustomSubdomain string = 'sp${take(uniqueString(resourceGroup().id, 'speech-subdomain'), 20)}'
+param storageAccountName string = 'st${take(uniqueString(subscription().id, resourceGroup().id), 20)}'
 param maxReplicas int = 1
 param minReplicas int = 0
 
@@ -40,6 +41,20 @@ resource speech 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
     customSubDomainName: speechCustomSubdomain
     publicNetworkAccess: 'Enabled'
     disableLocalAuth: true
+  }
+}
+
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: storageAccountName
+  location: location
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    allowBlobPublicAccess: false
+    supportsHttpsTrafficOnly: true
   }
 }
 
@@ -89,6 +104,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'MAX_ARTICLE_CHARS'
               value: '5000'
             }
+            {
+              name: 'AZURE_STORAGE_ACCOUNT_URL'
+              value: 'https://${storageAccount.name}.table.core.windows.net'
+            }
           ]
         }
       ]
@@ -132,11 +151,25 @@ resource speechRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-0
   }
 }
 
+@description('Built-in "Storage Table Data Contributor" role definition ID.')
+var storageTableContributorRoleId = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
+
+resource storageTableRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: storageAccount
+  name: guid(storageAccount.id, containerApp.id, storageTableContributorRoleId)
+  properties: {
+    principalId: containerApp.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableContributorRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output containerAppName string = containerApp.name
 output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn
 output containerAppPrincipalId string = containerApp.identity.principalId
 output speechResourceId string = speech.id
 output speechEndpoint string = 'https://${speechCustomSubdomain}.cognitiveservices.azure.com'
+output storageAccountUrl string = 'https://${storageAccount.name}.table.core.windows.net'
 
 // ---------------------------------------------------------------------------
 // Entra ID application for Container Apps built-in auth (Easy Auth).
