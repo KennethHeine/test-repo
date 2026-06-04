@@ -2,3 +2,6 @@ node_modules
 dist
 .env
 npm-debug.log*
+
+# Compiled Bicep ARM output
+infra/main.json

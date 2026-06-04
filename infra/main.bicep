@@ -1,11 +1,25 @@
+extension microsoftGraphV1
+
 param location string = resourceGroup().location
 param containerAppEnvName string = 'cae-articletts'
 param containerAppName string = 'ca-articletts'
-param image string
+@description('Container image to deploy. Defaults to a public bootstrap placeholder so the Container App can be created before the real private GHCR image exists. The deploy-app workflow swaps in the real image.')
+param image string = 'mcr.microsoft.com/k8se/quickstart:latest'
 param speechAccountName string = 'sp${take(uniqueString(subscription().id, resourceGroup().id), 20)}'
 param speechCustomSubdomain string = 'sp${take(uniqueString(resourceGroup().id, 'speech-subdomain'), 20)}'
 param maxReplicas int = 1
 param minReplicas int = 0
+
+@description('Display name for the Entra ID application used by Container Apps built-in auth (Easy Auth).')
+param authAppDisplayName string = 'ca-articletts-auth'
+
+@description('Unique name (tenant-wide) for the auth Entra application. Used for idempotent redeployments.')
+param authAppUniqueName string = 'ca-articletts-auth-${uniqueString(subscription().id, resourceGroup().id)}'
+
+// OpenID Connect issuer for this tenant. Also used as the issuer that the federated
+// identity credential trusts so the Container App managed identity can act as the
+// auth application without any client secret.
+var entraIssuer = '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
 
 resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: containerAppEnvName
@@ -97,3 +111,92 @@ output containerAppFqdn string = containerApp.properties.configuration.ingress.f
 output containerAppPrincipalId string = containerApp.identity.principalId
 output speechResourceId string = speech.id
 output speechEndpoint string = 'https://${speechCustomSubdomain}.cognitiveservices.azure.com'
+
+// ---------------------------------------------------------------------------
+// Entra ID application for Container Apps built-in auth (Easy Auth).
+//
+// Created declaratively via the Microsoft Graph Bicep extension so no app
+// registration has to be created by hand and no client id/secret has to be
+// stored as a GitHub secret. The Container App's system-assigned managed
+// identity is registered as a federated identity credential on the app, so
+// Easy Auth authenticates using the managed identity instead of a client
+// secret (secret-less).
+// ---------------------------------------------------------------------------
+
+resource authApp 'Microsoft.Graph/applications@v1.0' = {
+  uniqueName: authAppUniqueName
+  displayName: authAppDisplayName
+  signInAudience: 'AzureADMyOrg'
+  web: {
+    redirectUris: [
+      'https://${containerApp.properties.configuration.ingress.fqdn}/.auth/login/aad/callback'
+    ]
+    implicitGrantSettings: {
+      enableIdTokenIssuance: true
+    }
+  }
+  requiredResourceAccess: [
+    {
+      // Microsoft Graph
+      resourceAppId: '00000003-0000-0000-c000-000000000000'
+      resourceAccess: [
+        {
+          // User.Read (delegated)
+          id: 'e1fe6dd8-ba31-4d61-89e7-88639da4683d'
+          type: 'Scope'
+        }
+      ]
+    }
+  ]
+}
+
+// Trust the Container App's managed identity so Easy Auth needs no client secret.
+resource authFederatedCredential 'Microsoft.Graph/applications/federatedIdentityCredentials@v1.0' = {
+  name: '${authApp.uniqueName}/containerAppMI'
+  audiences: [
+    'api://AzureADTokenExchange'
+  ]
+  issuer: entraIssuer
+  subject: containerApp.identity.principalId
+}
+
+resource authServicePrincipal 'Microsoft.Graph/servicePrincipals@v1.0' = {
+  appId: authApp.appId
+}
+
+// Container Apps built-in auth configuration (Easy Auth) wired to the app above.
+resource authConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
+  parent: containerApp
+  name: 'current'
+  properties: {
+    platform: {
+      enabled: true
+    }
+    globalValidation: {
+      redirectToProvider: 'azureactivedirectory'
+      unauthenticatedClientAction: 'RedirectToLoginPage'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: authApp.appId
+          // No clientSecretSettingName: the Container App managed identity
+          // federates to the app registration (federatedIdentityCredentials above).
+          openIdIssuer: entraIssuer
+        }
+        validation: {
+          allowedAudiences: [
+            authApp.appId
+          ]
+        }
+      }
+    }
+  }
+  dependsOn: [
+    authServicePrincipal
+  ]
+}
+
+output authAppClientId string = authApp.appId
+output authAppServicePrincipalId string = authServicePrincipal.id
