@@ -102,7 +102,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               name: 'MAX_ARTICLE_CHARS'
-              value: '5000'
+              value: '50000'
             }
             {
               name: 'AZURE_STORAGE_ACCOUNT_URL'
