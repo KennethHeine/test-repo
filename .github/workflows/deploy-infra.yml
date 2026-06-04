@@ -68,39 +68,13 @@ jobs:
 
             containerAppName=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.containerAppName.value -o tsv)
             containerAppFqdn=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.containerAppFqdn.value -o tsv)
-            containerAppPrincipalId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.containerAppPrincipalId.value -o tsv)
-            speechResourceId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.speechResourceId.value -o tsv)
             speechEndpoint=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.speechEndpoint.value -o tsv)
             authAppClientId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.authAppClientId.value -o tsv)
 
             echo "containerAppName=$containerAppName" >> "$GITHUB_OUTPUT"
             echo "containerAppFqdn=$containerAppFqdn" >> "$GITHUB_OUTPUT"
-            echo "containerAppPrincipalId=$containerAppPrincipalId" >> "$GITHUB_OUTPUT"
-            echo "speechResourceId=$speechResourceId" >> "$GITHUB_OUTPUT"
             echo "speechEndpoint=$speechEndpoint" >> "$GITHUB_OUTPUT"
             echo "authAppClientId=$authAppClientId" >> "$GITHUB_OUTPUT"
-
-      - name: Assign Speech RBAC role to Container App identity
-        uses: azure/cli@v2
-        with:
-          inlineScript: |
-            set -euo pipefail
-            existing=$(az role assignment list \
-              --assignee-object-id "${{ steps.deploy.outputs.containerAppPrincipalId }}" \
-              --scope "${{ steps.deploy.outputs.speechResourceId }}" \
-              --role "Cognitive Services Speech User" \
-              --query "length(@)" -o tsv)
-
-            if [ "$existing" = "0" ]; then
-              az role assignment create \
-                --assignee-object-id "${{ steps.deploy.outputs.containerAppPrincipalId }}" \
-                --assignee-principal-type ServicePrincipal \
-                --scope "${{ steps.deploy.outputs.speechResourceId }}" \
-                --role "Cognitive Services Speech User" \
-                --only-show-errors
-            else
-              echo "Role assignment already exists."
-            fi
 
       - name: Auth configuration summary
         run: |
