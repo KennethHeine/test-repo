@@ -14,6 +14,12 @@
       button:disabled { opacity: 0.6; }
       #status { min-height: 1.4rem; color: #1e293b; }
       audio { width: 100%; margin-top: 0.75rem; }
+      label { display: grid; gap: 0.35rem; }
+      #voice-info { margin: 0.25rem 0 0; padding: 0.6rem 0.75rem; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 0.5rem; color: #1e3a8a; font-size: 0.9rem; }
+      #voice-info .badge { display: inline-block; margin-left: 0.4rem; padding: 0.05rem 0.4rem; border-radius: 0.35rem; background: #2563eb; color: #fff; font-size: 0.7rem; vertical-align: middle; }
+      details.voice-guide { margin-top: 0.5rem; font-size: 0.9rem; color: #334155; }
+      details.voice-guide ul { margin: 0.5rem 0 0; padding-left: 1.2rem; }
+      details.voice-guide summary { cursor: pointer; font-weight: 600; }
     </style>
   </head>
   <body>
@@ -28,11 +34,59 @@
         <label>
           Voice
           <select id="voice" name="voice">
-            <option value="en-US-JennyNeural">en-US-JennyNeural</option>
-            <option value="en-US-GuyNeural">en-US-GuyNeural</option>
-            <option value="nb-NO-PernilleNeural">nb-NO-PernilleNeural</option>
+            <optgroup label="English (US) — Highest quality (HD)">
+              <option value="en-US-Ava:DragonHDLatestNeural"
+                data-recommended="true"
+                data-info="Best overall quality: Azure's newest HD voice. Ultra-natural, expressive female narration. Ideal for long articles.">
+                en-US-Ava (HD) — most natural
+              </option>
+              <option value="en-US-Andrew:DragonHDLatestNeural"
+                data-info="HD male voice. Warm, natural, studio-grade quality. Great for long-form narration.">
+                en-US-Andrew (HD) — natural male
+              </option>
+            </optgroup>
+            <optgroup label="English (US) — Multilingual">
+              <option value="en-US-AvaMultilingualNeural"
+                data-info="Very natural female voice that also pronounces other languages well. A great default.">
+                en-US-Ava (Multilingual)
+              </option>
+              <option value="en-US-AndrewMultilingualNeural"
+                data-info="Natural male voice with strong multilingual pronunciation.">
+                en-US-Andrew (Multilingual)
+              </option>
+            </optgroup>
+            <optgroup label="English (US) — Standard neural">
+              <option value="en-US-JennyNeural"
+                data-info="Reliable, friendly female voice. Widely supported in every region — safe default.">
+                en-US-Jenny
+              </option>
+              <option value="en-US-GuyNeural"
+                data-info="Reliable male voice. Widely supported in every region.">
+                en-US-Guy
+              </option>
+            </optgroup>
+            <optgroup label="Norwegian (Bokmål)">
+              <option value="nb-NO-PernilleNeural"
+                data-info="Natural Norwegian (Bokmål) female voice. Best choice for Norwegian articles.">
+                nb-NO-Pernille
+              </option>
+              <option value="nb-NO-FinnNeural"
+                data-info="Natural Norwegian (Bokmål) male voice.">
+                nb-NO-Finn
+              </option>
+            </optgroup>
           </select>
         </label>
+        <p id="voice-info"></p>
+        <details class="voice-guide">
+          <summary>Which voice should I pick?</summary>
+          <ul>
+            <li><strong>Best quality:</strong> the <strong>HD</strong> voices (e.g. <em>en-US-Ava (HD)</em>) sound the most human and are ideal for long articles. Availability can depend on the Azure region.</li>
+            <li><strong>Multiple languages in one article:</strong> pick a <strong>Multilingual</strong> voice — it pronounces foreign names and phrases more accurately.</li>
+            <li><strong>Maximum compatibility:</strong> the <strong>standard neural</strong> voices (Jenny, Guy) work in every region.</li>
+            <li><strong>Norwegian content:</strong> use a <strong>nb-NO</strong> voice (Pernille or Finn).</li>
+          </ul>
+        </details>
         <button id="submit" type="submit">Generate audio</button>
       </form>
       <p id="status"></p>
@@ -43,6 +97,24 @@
       const statusEl = document.getElementById('status');
       const player = document.getElementById('player');
       const submitButton = document.getElementById('submit');
+      const voiceSelect = document.getElementById('voice');
+      const voiceInfo = document.getElementById('voice-info');
+
+      function updateVoiceInfo() {
+        const option = voiceSelect.options[voiceSelect.selectedIndex];
+        const info = option?.dataset.info ?? '';
+        const recommended = option?.dataset.recommended === 'true';
+        voiceInfo.textContent = info;
+        if (recommended) {
+          const badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.textContent = 'Recommended';
+          voiceInfo.appendChild(badge);
+        }
+      }
+
+      voiceSelect.addEventListener('change', updateVoiceInfo);
+      updateVoiceInfo();
 
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -50,10 +122,11 @@
         submitButton.disabled = true;
 
         const formData = new FormData(form);
+        const voice = formData.get('voice');
         const payload = {
           url: formData.get('url'),
-          voice: formData.get('voice'),
-          language: 'en'
+          voice,
+          language: typeof voice === 'string' ? voice.split('-')[0] : 'en'
         };
 
         try {
