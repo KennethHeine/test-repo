@@ -4,6 +4,7 @@ import { Readability } from '@mozilla/readability';
 import { JSDOM } from 'jsdom';
 import * as sdk from 'microsoft-cognitiveservices-speech-sdk';
 import { DefaultAzureCredential } from '@azure/identity';
+import { TableClient } from '@azure/data-tables';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import path from 'node:path';
@@ -18,6 +19,80 @@ const speechResourceId = process.env.SPEECH_RESOURCE_ID;
 const speechRegion = process.env.SPEECH_REGION;
 const maxCharacters = Number(process.env.MAX_ARTICLE_CHARS ?? 5000);
 const defaultVoice = process.env.DEFAULT_VOICE ?? 'en-US-JennyNeural';
+
+// ---------------------------------------------------------------------------
+// Monthly character usage — persisted in Azure Table Storage.
+// Falls back to in-memory when AZURE_STORAGE_ACCOUNT_URL is not set (local
+// dev without storage).
+// ---------------------------------------------------------------------------
+const FREE_TIER_CHARS = 500_000;
+const USAGE_TABLE = 'usage';
+const USAGE_PARTITION = 'usage';
+
+function currentMonth(): string {
+  return new Date().toISOString().slice(0, 7); // "YYYY-MM"
+}
+
+// Initialise TableClient once. On startup, create the table if it doesn't
+// exist (idempotent — returns 409 Conflict which we ignore).
+let tableClient: TableClient | null = null;
+if (process.env.AZURE_STORAGE_ACCOUNT_URL) {
+  tableClient = new TableClient(process.env.AZURE_STORAGE_ACCOUNT_URL, USAGE_TABLE, credential);
+  tableClient.createTable().catch(() => { /* table already exists */ });
+}
+
+// In-memory fallback used only when storage is not configured.
+let memUsage = { month: currentMonth(), chars: 0 };
+
+interface UsageStats { month: string; chars: number; free: number; percent: number }
+
+async function recordUsage(chars: number): Promise<void> {
+  const month = currentMonth();
+  if (!tableClient) {
+    if (memUsage.month !== month) memUsage = { month, chars: 0 };
+    memUsage.chars += chars;
+    return;
+  }
+  try {
+    let current = 0;
+    let etag: string | undefined;
+    try {
+      const entity = await tableClient.getEntity<{ chars: number }>(USAGE_PARTITION, month);
+      current = entity.chars ?? 0;
+      etag = entity.etag;
+    } catch (e: unknown) {
+      if ((e as { statusCode?: number }).statusCode !== 404) throw e;
+    }
+    const updated = { partitionKey: USAGE_PARTITION, rowKey: month, chars: current + chars };
+    if (etag) {
+      await tableClient.updateEntity(updated, 'Replace', { etag });
+    } else {
+      await tableClient.createEntity(updated);
+    }
+  } catch (e) {
+    console.warn('[usage] Failed to record usage:', e);
+  }
+}
+
+async function getUsageStats(): Promise<UsageStats> {
+  const month = currentMonth();
+  if (!tableClient) {
+    if (memUsage.month !== month) memUsage = { month, chars: 0 };
+    const chars = memUsage.chars;
+    return { month, chars, free: FREE_TIER_CHARS, percent: Math.min(100, Math.round(chars / FREE_TIER_CHARS * 100)) };
+  }
+  try {
+    const entity = await tableClient.getEntity<{ chars: number }>(USAGE_PARTITION, month);
+    const chars = entity.chars ?? 0;
+    return { month, chars, free: FREE_TIER_CHARS, percent: Math.min(100, Math.round(chars / FREE_TIER_CHARS * 100)) };
+  } catch (e: unknown) {
+    if ((e as { statusCode?: number }).statusCode === 404) {
+      return { month, chars: 0, free: FREE_TIER_CHARS, percent: 0 };
+    }
+    throw e;
+  }
+}
+
 const fetchTimeoutMs = Number(process.env.FETCH_TIMEOUT_MS ?? 20_000);
 
 // A browser-like User-Agent and Accept headers reduce the chance that sites
@@ -274,6 +349,15 @@ app.get('/api/me', (req: Request, res: Response) => {
   });
 });
 
+app.get('/api/usage', async (_req: Request, res: Response) => {
+  try {
+    res.json(await getUsageStats());
+  } catch (e) {
+    console.error('[api/usage error]', e);
+    res.json({ month: currentMonth(), chars: 0, free: FREE_TIER_CHARS, percent: 0 });
+  }
+});
+
 interface PreviewResult {
   chars: number;
   truncated: boolean;
@@ -375,6 +459,7 @@ async function generateArticleAudio(
     });
   });
 
+  await recordUsage(text.length);
   return audio;
 }
 
