@@ -250,7 +250,12 @@
             if (message.event === 'progress') {
               updateProgress(message.data);
             } else if (message.event === 'audio') {
-              const bytes = Uint8Array.from(atob(message.data.audio), (c) => c.charCodeAt(0));
+              let bytes;
+              try {
+                bytes = Uint8Array.from(atob(message.data.audio), (c) => c.charCodeAt(0));
+              } catch {
+                throw new Error('Received malformed audio data from the server.');
+              }
               const blob = new Blob([bytes], { type: message.data.contentType || 'audio/mpeg' });
               player.src = URL.createObjectURL(blob);
               player.play().catch(() => {});

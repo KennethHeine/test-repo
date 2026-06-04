@@ -286,6 +286,10 @@ function stageProgress(stage: Exclude<ProgressStage, 'done'>, fraction = 0): num
   return Number((start + (end - start) * clamped).toFixed(4));
 }
 
+// Minimum change in overall progress before a new synthesis update is streamed,
+// to avoid flooding the client with tiny, indistinguishable increments.
+const MIN_PROGRESS_DELTA = 0.01;
+
 interface ReadRequest {
   url?: string;
   voice?: string;
@@ -362,7 +366,7 @@ app.post('/api/read', readLimiter, async (req: Request, res: Response) => {
   try {
     const audio = await generateArticleAudio(body, (event) => {
       // Avoid flooding the stream with tiny, indistinguishable updates.
-      if (event.progress - lastProgress < 0.01 && event.stage === 'synthesizing') {
+      if (event.progress - lastProgress < MIN_PROGRESS_DELTA && event.stage === 'synthesizing') {
         return;
       }
       lastProgress = event.progress;
