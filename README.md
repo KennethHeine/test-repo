@@ -31,7 +31,117 @@ The following secrets are already configured in this repository:
 | `AZURE_TENANT_ID` | Azure AD tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
 
-### Usage
+## Article-to-Speech MVP
+
+This repo now contains a minimal full-stack MVP that runs in **one Azure Container App**:
+
+- Frontend UI: `GET /`
+- Backend health: `GET /health`
+- Backend TTS API: `POST /api/read`
+- Optional auth debug endpoint: `GET /api/me` (selected Easy Auth headers only)
+
+The same Node.js/TypeScript container serves static frontend files and API routes.
+
+## Azure architecture implemented
+
+- One **Azure Container Apps managed environment** (Consumption)
+- One **Azure Container App** with:
+  - external HTTPS ingress
+  - target port `8080`
+  - `minReplicas: 0` and `maxReplicas: 1`
+  - HTTP scale rule for low traffic
+  - system-assigned managed identity
+- One **Azure AI Speech** resource (`SpeechServices`, F0)
+  - custom subdomain endpoint
+  - local key auth disabled (`disableLocalAuth: true`)
+- RBAC assignment:
+  - Container App managed identity gets `Cognitive Services Speech User` on Speech resource
+- Built-in Container Apps authentication (Easy Auth) with Microsoft Entra ID:
+  - unauthenticated requests redirected to login
+  - tenant restricted via `--tenant-id`
+
+## App behavior
+
+`POST /api/read` body:
+
+```json
+{
+  "url": "https://example.com/article",
+  "voice": "en-US-JennyNeural",
+  "language": "en"
+}
+```
+
+Flow implemented:
+
+1. URL validation (`http/https` only)
+2. Host/IP safety checks (blocks localhost/private/link-local/metadata endpoints)
+3. Fetch article HTML
+4. Extract readable text with `@mozilla/readability` + `jsdom`
+5. Normalize and limit text length
+6. Call Azure AI Speech TTS using managed identity (Microsoft Entra token)
+7. Return `audio/mpeg`
+
+## Local development
+
+```bash
+npm install
+npm run dev
+```
+
+App runs on `http://localhost:8080` by default.
+
+Required environment variables for TTS:
+
+- `SPEECH_ENDPOINT` (custom subdomain endpoint, e.g. `https://<name>.cognitiveservices.azure.com`)
+- `SPEECH_RESOURCE_ID` (full Azure resource ID of Speech resource)
+
+Optional:
+
+- `MAX_ARTICLE_CHARS` (default `12000`)
+- `DEFAULT_VOICE` (default `en-US-JennyNeural`)
+
+## Deployment
+
+### Infrastructure (Bicep)
+
+Files:
+
+- `/tmp/workspace/KennethHeine/test-repo/infra/main.bicep`
+- `/tmp/workspace/KennethHeine/test-repo/infra/main.parameters.json`
+
+The infra workflow deploys:
+
+- Container Apps environment
+- Container App (single container, ingress, scaling, managed identity)
+- Speech resource (F0 + custom subdomain)
+- Speech RBAC role assignment
+- Easy Auth enablement + Entra provider setup through Azure CLI
+
+### Entra app registration requirement for built-in auth
+
+Create a single-tenant Entra app registration and add its credentials as repository secrets:
+
+- `ENTRA_AUTH_CLIENT_ID`
+- `ENTRA_AUTH_CLIENT_SECRET`
+
+Set redirect URI to:
+
+`https://<container-app-fqdn>/.auth/login/aad/callback`
+
+The infra workflow prints the correct FQDN after deployment.
+
+### GitHub Actions workflows
+
+- `deploy-infra.yml`
+  - Deploys Bicep infra
+  - Assigns Speech RBAC role to managed identity
+  - Enables Container App built-in auth and configures Microsoft provider
+- `deploy-app.yml`
+  - Builds and pushes container image to `ghcr.io`
+  - Updates the Container App image
+
+## Usage
 
 To authenticate with Azure in a GitHub Actions workflow:
 

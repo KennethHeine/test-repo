@@ -1,0 +1,97 @@
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/deploy-infra.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: rg-test-repo
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Bicep
+        id: deploy
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            DEPLOYMENT_NAME="infra-${GITHUB_RUN_ID}"
+            az deployment group create \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "$DEPLOYMENT_NAME" \
+              --template-file infra/main.bicep \
+              --parameters @infra/main.parameters.json 1>/dev/null
+
+            containerAppName=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.containerAppName.value -o tsv)
+            containerAppFqdn=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.containerAppFqdn.value -o tsv)
+            containerAppPrincipalId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.containerAppPrincipalId.value -o tsv)
+            speechResourceId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.speechResourceId.value -o tsv)
+            speechEndpoint=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.speechEndpoint.value -o tsv)
+
+            echo "containerAppName=$containerAppName" >> "$GITHUB_OUTPUT"
+            echo "containerAppFqdn=$containerAppFqdn" >> "$GITHUB_OUTPUT"
+            echo "containerAppPrincipalId=$containerAppPrincipalId" >> "$GITHUB_OUTPUT"
+            echo "speechResourceId=$speechResourceId" >> "$GITHUB_OUTPUT"
+            echo "speechEndpoint=$speechEndpoint" >> "$GITHUB_OUTPUT"
+
+      - name: Assign Speech RBAC role to Container App identity
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            az role assignment create \
+              --assignee-object-id "${{ steps.deploy.outputs.containerAppPrincipalId }}" \
+              --assignee-principal-type ServicePrincipal \
+              --scope "${{ steps.deploy.outputs.speechResourceId }}" \
+              --role "Cognitive Services Speech User" || true
+
+      - name: Configure Container App built-in auth (Entra single-tenant)
+        uses: azure/cli@v2
+        env:
+          ENTRA_AUTH_CLIENT_ID: ${{ secrets.ENTRA_AUTH_CLIENT_ID }}
+          ENTRA_AUTH_CLIENT_SECRET: ${{ secrets.ENTRA_AUTH_CLIENT_SECRET }}
+        with:
+          inlineScript: |
+            set -euo pipefail
+
+            if [ -z "${ENTRA_AUTH_CLIENT_ID:-}" ] || [ -z "${ENTRA_AUTH_CLIENT_SECRET:-}" ]; then
+              echo "Missing ENTRA_AUTH_CLIENT_ID or ENTRA_AUTH_CLIENT_SECRET repository secret."
+              exit 1
+            fi
+
+            az containerapp auth update \
+              --name "${{ steps.deploy.outputs.containerAppName }}" \
+              --resource-group "$RESOURCE_GROUP" \
+              --enabled true \
+              --unauthenticated-client-action RedirectToLoginPage
+
+            az containerapp auth microsoft update \
+              --name "${{ steps.deploy.outputs.containerAppName }}" \
+              --resource-group "$RESOURCE_GROUP" \
+              --client-id "$ENTRA_AUTH_CLIENT_ID" \
+              --client-secret "$ENTRA_AUTH_CLIENT_SECRET" \
+              --tenant-id "${{ secrets.AZURE_TENANT_ID }}"
+
+            echo "Container App URL: https://${{ steps.deploy.outputs.containerAppFqdn }}"
+            echo "Add this redirect URI to the Entra app registration if needed:"
+            echo "https://${{ steps.deploy.outputs.containerAppFqdn }}/.auth/login/aad/callback"

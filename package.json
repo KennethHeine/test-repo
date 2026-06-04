@@ -1,0 +1,27 @@
+{
+  "name": "article-to-speech-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && mkdir -p dist && cp -R src/public dist/public",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.6.0",
+    "@mozilla/readability": "^0.6.0",
+    "express": "^4.21.2",
+    "jsdom": "^26.0.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.41.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
