@@ -82,8 +82,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: speech.id
             }
             {
+              name: 'SPEECH_REGION'
+              value: speech.location
+            }
+            {
               name: 'MAX_ARTICLE_CHARS'
-              value: '12000'
+              value: '5000'
             }
           ]
         }

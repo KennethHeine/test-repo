@@ -119,10 +119,11 @@ Required environment variables for TTS:
 
 - `SPEECH_ENDPOINT` (custom subdomain endpoint, e.g. `https://<name>.cognitiveservices.azure.com`)
 - `SPEECH_RESOURCE_ID` (full Azure resource ID of Speech resource)
+- `SPEECH_REGION` (Azure region of Speech resource, e.g. `norwayeast`)
 
 Optional:
 
-- `MAX_ARTICLE_CHARS` (default `12000`)
+- `MAX_ARTICLE_CHARS` (default `5000` — keeps synthesis under the 10-minute service limit)
 - `DEFAULT_VOICE` (default `en-US-JennyNeural`)
 - `FETCH_TIMEOUT_MS` (default `20000`) — how long to wait when downloading the
   article before returning a `504` timeout. Increase it for slow sites.

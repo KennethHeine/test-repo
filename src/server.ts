@@ -15,7 +15,8 @@ const credential = new DefaultAzureCredential();
 const port = Number(process.env.PORT ?? 8080);
 const speechEndpoint = process.env.SPEECH_ENDPOINT;
 const speechResourceId = process.env.SPEECH_RESOURCE_ID;
-const maxCharacters = Number(process.env.MAX_ARTICLE_CHARS ?? 12000);
+const speechRegion = process.env.SPEECH_REGION;
+const maxCharacters = Number(process.env.MAX_ARTICLE_CHARS ?? 5000);
 const defaultVoice = process.env.DEFAULT_VOICE ?? 'en-US-JennyNeural';
 const fetchTimeoutMs = Number(process.env.FETCH_TIMEOUT_MS ?? 20_000);
 
@@ -180,8 +181,8 @@ function pickVoice(voice?: string, language?: string): string {
 }
 
 async function createSpeechConfig(): Promise<sdk.SpeechConfig> {
-  if (!speechEndpoint || !speechResourceId) {
-    throw new Error('SPEECH_ENDPOINT and SPEECH_RESOURCE_ID must be configured');
+  if (!speechEndpoint || !speechResourceId || !speechRegion) {
+    throw new Error('SPEECH_ENDPOINT, SPEECH_RESOURCE_ID and SPEECH_REGION must be configured');
   }
 
   const token = await credential.getToken('https://cognitiveservices.azure.com/.default');
@@ -189,12 +190,11 @@ async function createSpeechConfig(): Promise<sdk.SpeechConfig> {
     throw new Error('Could not acquire Azure AI Speech access token');
   }
 
+  // For SpeechSynthesizer, MS docs require fromAuthorizationToken(aad#resourceId#token, region).
+  // The fromEndpoint approach only works for recognizers. The aad# prefix tells the regional
+  // TTS endpoint which Speech resource to authenticate against.
   const authorizationToken = `aad#${speechResourceId}#${token.token}`;
-  // fromEndpoint is required for custom-subdomain endpoints; fromAuthorizationToken
-  // expects a plain region name, not a URL, and would fail to route correctly here.
-  const speechConfig = sdk.SpeechConfig.fromEndpoint(new URL(speechEndpoint));
-  speechConfig.authorizationToken = authorizationToken;
-  return speechConfig;
+  return sdk.SpeechConfig.fromAuthorizationToken(authorizationToken, speechRegion);
 }
 
 async function synthesizeSpeech(
@@ -350,6 +350,7 @@ app.post('/api/read', readLimiter, async (req: Request, res: Response) => {
         res.status(error.statusCode).json({ error: error.message });
         return;
       }
+      console.error('[api/read error]', error);
       res.status(500).json({ error: 'Internal server error' });
     }
     return;
@@ -383,6 +384,9 @@ app.post('/api/read', readLimiter, async (req: Request, res: Response) => {
     const statusCode = error instanceof HttpError ? error.statusCode : 500;
     const message =
       error instanceof HttpError ? error.message : 'Internal server error';
+    if (!(error instanceof HttpError)) {
+      console.error('[api/read SSE error]', error);
+    }
     send('error', { statusCode, error: message });
   } finally {
     res.end();
