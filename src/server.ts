@@ -35,7 +35,12 @@ class HttpError extends Error {
 
 function isBlockedIp(ip: string): boolean {
   const normalized = ip.toLowerCase();
-  if (normalized === '::' || normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80:')) {
+  if (
+    normalized === '::' ||
+    normalized === '::1' ||
+    /^(fc|fd)[0-9a-f]{0,2}:/u.test(normalized) ||
+    /^fe[89ab][0-9a-f]:/u.test(normalized)
+  ) {
     return true;
   }
 
@@ -219,7 +224,7 @@ const staticLimiter = rateLimit({
 });
 
 app.use(express.json({ limit: '256kb' }));
-app.use(staticLimiter, express.static(publicDir, { index: false }));
+app.use(staticLimiter, express.static(publicDir));
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ ok: true });
