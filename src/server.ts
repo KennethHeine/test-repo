@@ -17,7 +17,18 @@ const speechEndpoint = process.env.SPEECH_ENDPOINT;
 const speechResourceId = process.env.SPEECH_RESOURCE_ID;
 const maxCharacters = Number(process.env.MAX_ARTICLE_CHARS ?? 12000);
 const defaultVoice = process.env.DEFAULT_VOICE ?? 'en-US-JennyNeural';
-const fetchTimeoutMs = Number(process.env.FETCH_TIMEOUT_MS ?? 10_000);
+const fetchTimeoutMs = Number(process.env.FETCH_TIMEOUT_MS ?? 20_000);
+
+// A browser-like User-Agent and Accept headers reduce the chance that sites
+// stall, block, or serve a degraded response to the fetch, which previously
+// surfaced as 504 "Timed out fetching article" errors.
+const FETCH_HEADERS: Record<string, string> = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+    'Chrome/124.0.0.0 Safari/537.36 article-to-speech-app/1.0',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9'
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, 'public');
@@ -115,12 +126,12 @@ async function fetchArticleHtml(initialUrl: URL): Promise<{ html: string; finalU
     try {
       response = await fetch(safeUrl, {
         redirect: 'manual',
-        headers: { 'User-Agent': 'article-to-speech-app/1.0' },
+        headers: FETCH_HEADERS,
         signal: AbortSignal.timeout(fetchTimeoutMs)
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'TimeoutError') {
-        throw new HttpError(504, 'Timed out fetching article');
+        throw new HttpError(504, 'Timed out fetching the article (the site took too long to respond)');
       }
       throw error;
     }

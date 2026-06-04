@@ -124,6 +124,8 @@ Optional:
 
 - `MAX_ARTICLE_CHARS` (default `12000`)
 - `DEFAULT_VOICE` (default `en-US-JennyNeural`)
+- `FETCH_TIMEOUT_MS` (default `20000`) — how long to wait when downloading the
+  article before returning a `504` timeout. Increase it for slow sites.
 
 ## Deployment
 
