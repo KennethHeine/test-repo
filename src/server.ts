@@ -190,7 +190,11 @@ async function createSpeechConfig(): Promise<sdk.SpeechConfig> {
   }
 
   const authorizationToken = `aad#${speechResourceId}#${token.token}`;
-  return sdk.SpeechConfig.fromAuthorizationToken(authorizationToken, speechEndpoint);
+  // fromEndpoint is required for custom-subdomain endpoints; fromAuthorizationToken
+  // expects a plain region name, not a URL, and would fail to route correctly here.
+  const speechConfig = sdk.SpeechConfig.fromEndpoint(new URL(speechEndpoint));
+  speechConfig.authorizationToken = authorizationToken;
+  return speechConfig;
 }
 
 async function synthesizeSpeech(
