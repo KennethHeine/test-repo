@@ -108,6 +108,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'AZURE_STORAGE_ACCOUNT_URL'
               value: 'https://${storageAccount.name}.table.core.windows.net'
             }
+            {
+              name: 'AZURE_STORAGE_BLOB_URL'
+              value: 'https://${storageAccount.name}.blob.core.windows.net'
+            }
           ]
         }
       ]
@@ -164,12 +168,26 @@ resource storageTableRoleAssignment 'Microsoft.Authorization/roleAssignments@202
   }
 }
 
+@description('Built-in "Storage Blob Data Contributor" role definition ID.')
+var storageBlobContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+resource storageBlobRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: storageAccount
+  name: guid(storageAccount.id, containerApp.id, storageBlobContributorRoleId)
+  properties: {
+    principalId: containerApp.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobContributorRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output containerAppName string = containerApp.name
 output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn
 output containerAppPrincipalId string = containerApp.identity.principalId
 output speechResourceId string = speech.id
 output speechEndpoint string = 'https://${speechCustomSubdomain}.cognitiveservices.azure.com'
 output storageAccountUrl string = 'https://${storageAccount.name}.table.core.windows.net'
+output storageBlobUrl string = 'https://${storageAccount.name}.blob.core.windows.net'
 
 // ---------------------------------------------------------------------------
 // Entra ID application for Container Apps built-in auth (Easy Auth).
