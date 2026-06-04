@@ -17,7 +17,18 @@ const speechEndpoint = process.env.SPEECH_ENDPOINT;
 const speechResourceId = process.env.SPEECH_RESOURCE_ID;
 const maxCharacters = Number(process.env.MAX_ARTICLE_CHARS ?? 12000);
 const defaultVoice = process.env.DEFAULT_VOICE ?? 'en-US-JennyNeural';
-const fetchTimeoutMs = Number(process.env.FETCH_TIMEOUT_MS ?? 10_000);
+const fetchTimeoutMs = Number(process.env.FETCH_TIMEOUT_MS ?? 20_000);
+
+// A browser-like User-Agent and Accept headers reduce the chance that sites
+// stall, block, or serve a degraded response to the fetch, which previously
+// surfaced as 504 "Timed out fetching article" errors.
+const FETCH_HEADERS: Record<string, string> = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+    'Chrome/124.0.0.0 Safari/537.36 article-to-speech-app/1.0',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9'
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, 'public');
@@ -115,12 +126,12 @@ async function fetchArticleHtml(initialUrl: URL): Promise<{ html: string; finalU
     try {
       response = await fetch(safeUrl, {
         redirect: 'manual',
-        headers: { 'User-Agent': 'article-to-speech-app/1.0' },
+        headers: FETCH_HEADERS,
         signal: AbortSignal.timeout(fetchTimeoutMs)
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'TimeoutError') {
-        throw new HttpError(504, 'Timed out fetching article');
+        throw new HttpError(504, 'Timed out fetching the article (the site took too long to respond)');
       }
       throw error;
     }
@@ -182,15 +193,29 @@ async function createSpeechConfig(): Promise<sdk.SpeechConfig> {
   return sdk.SpeechConfig.fromAuthorizationToken(authorizationToken, speechEndpoint);
 }
 
-async function synthesizeSpeech(text: string, voiceName: string): Promise<Buffer> {
+async function synthesizeSpeech(
+  text: string,
+  voiceName: string,
+  onProgress?: (fraction: number) => void
+): Promise<Buffer> {
   const speechConfig = await createSpeechConfig();
   speechConfig.speechSynthesisVoiceName = voiceName;
   speechConfig.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3;
 
   const ssml = `<speak version="1.0" xml:lang="en-US"><voice name="${escapeXml(voiceName)}">${escapeXml(text)}</voice></speak>`;
+  const textLength = text.length;
 
   return new Promise((resolve, reject) => {
     const synthesizer = new sdk.SpeechSynthesizer(speechConfig);
+
+    if (onProgress && textLength > 0) {
+      synthesizer.wordBoundary = (_sender, event) => {
+        const consumed = event.textOffset + event.wordLength;
+        const fraction = Math.min(1, Math.max(0, consumed / textLength));
+        onProgress(fraction);
+      };
+    }
+
     synthesizer.speakSsmlAsync(
       ssml,
       (result) => {
@@ -238,36 +263,125 @@ app.get('/api/me', (req: Request, res: Response) => {
   });
 });
 
+type ProgressStage = 'validating' | 'fetching' | 'extracting' | 'synthesizing' | 'done';
+
+interface ProgressEvent {
+  stage: ProgressStage;
+  progress: number;
+  message: string;
+}
+
+// Overall progress is split into weighted phases so the client can render a
+// single smooth progress bar across the whole article-to-speech pipeline.
+const STAGE_RANGES: Record<Exclude<ProgressStage, 'done'>, [number, number]> = {
+  validating: [0, 0.1],
+  fetching: [0.1, 0.35],
+  extracting: [0.35, 0.45],
+  synthesizing: [0.45, 1]
+};
+
+function stageProgress(stage: Exclude<ProgressStage, 'done'>, fraction = 0): number {
+  const [start, end] = STAGE_RANGES[stage];
+  const clamped = Math.min(1, Math.max(0, fraction));
+  return Number((start + (end - start) * clamped).toFixed(4));
+}
+
+// Minimum change in overall progress before a new synthesis update is streamed,
+// to avoid flooding the client with tiny, indistinguishable increments.
+const MIN_PROGRESS_DELTA = 0.01;
+
+interface ReadRequest {
+  url?: string;
+  voice?: string;
+  language?: string;
+}
+
+async function generateArticleAudio(
+  { url, voice, language }: ReadRequest,
+  onProgress: (event: ProgressEvent) => void
+): Promise<Buffer> {
+  if (!url) {
+    throw new HttpError(400, 'url is required');
+  }
+
+  onProgress({ stage: 'validating', progress: stageProgress('validating'), message: 'Checking the URL…' });
+  const parsedUrl = await validateExternalUrl(url);
+
+  onProgress({ stage: 'fetching', progress: stageProgress('fetching'), message: 'Fetching the article…' });
+  const { html, finalUrl } = await fetchArticleHtml(parsedUrl);
+
+  onProgress({ stage: 'extracting', progress: stageProgress('extracting'), message: 'Extracting readable text…' });
+  const dom = new JSDOM(html, { url: finalUrl.toString() });
+  const reader = new Readability(dom.window.document);
+  const article = reader.parse();
+
+  const text = cleanArticleText(article?.textContent ?? '');
+  if (!text) {
+    throw new HttpError(422, 'Could not extract readable article text');
+  }
+
+  onProgress({ stage: 'synthesizing', progress: stageProgress('synthesizing'), message: 'Converting text to speech…' });
+  const audio = await synthesizeSpeech(text, pickVoice(voice, language), (fraction) => {
+    onProgress({
+      stage: 'synthesizing',
+      progress: stageProgress('synthesizing', fraction),
+      message: 'Converting text to speech…'
+    });
+  });
+
+  return audio;
+}
+
 app.post('/api/read', readLimiter, async (req: Request, res: Response) => {
+  const wantsStream = (req.header('accept') ?? '').includes('text/event-stream');
+  const body = req.body as ReadRequest;
+
+  if (!wantsStream) {
+    try {
+      const audio = await generateArticleAudio(body, () => {});
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.send(audio);
+    } catch (error) {
+      if (error instanceof HttpError) {
+        res.status(error.statusCode).json({ error: error.message });
+        return;
+      }
+      res.status(500).json({ error: 'Internal server error' });
+    }
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const send = (event: string, data: unknown): void => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  let lastProgress = -1;
+
   try {
-    const { url, voice, language } = req.body as { url?: string; voice?: string; language?: string };
-    if (!url) {
-      res.status(400).json({ error: 'url is required' });
-      return;
-    }
+    const audio = await generateArticleAudio(body, (event) => {
+      // Avoid flooding the stream with tiny, indistinguishable updates.
+      if (event.progress - lastProgress < MIN_PROGRESS_DELTA && event.stage === 'synthesizing') {
+        return;
+      }
+      lastProgress = event.progress;
+      send('progress', event);
+    });
 
-    const parsedUrl = await validateExternalUrl(url);
-    const { html, finalUrl } = await fetchArticleHtml(parsedUrl);
-    const dom = new JSDOM(html, { url: finalUrl.toString() });
-    const reader = new Readability(dom.window.document);
-    const article = reader.parse();
-
-    const text = cleanArticleText(article?.textContent ?? '');
-    if (!text) {
-      res.status(422).json({ error: 'Could not extract readable article text' });
-      return;
-    }
-
-    const audio = await synthesizeSpeech(text, pickVoice(voice, language));
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.send(audio);
+    send('progress', { stage: 'done', progress: 1, message: 'Done.' });
+    send('audio', { contentType: 'audio/mpeg', audio: audio.toString('base64') });
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({ error: 'Internal server error' });
+    const statusCode = error instanceof HttpError ? error.statusCode : 500;
+    const message =
+      error instanceof HttpError ? error.message : 'Internal server error';
+    send('error', { statusCode, error: message });
+  } finally {
+    res.end();
   }
 });
 

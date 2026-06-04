@@ -84,6 +84,28 @@ Flow implemented:
 6. Call Azure AI Speech TTS using managed identity (Microsoft Entra token)
 7. Return `audio/mpeg`
 
+### Live progress (Server-Sent Events)
+
+`POST /api/read` supports a streaming progress mode for a better loading
+experience. When the request includes `Accept: text/event-stream`, the endpoint
+streams progress events as each phase runs instead of blocking until the audio
+is ready:
+
+- `progress` events report the current `stage`
+  (`validating` → `fetching` → `extracting` → `synthesizing` → `done`), an
+  overall `progress` fraction (0–1), and a human-readable `message`. The
+  `synthesizing` stage reports sub-progress derived from Azure Speech word
+  boundary events.
+- A final `audio` event carries the base64-encoded `audio/mpeg` payload.
+- An `error` event carries the `statusCode` and error `message` if a phase fails.
+
+The frontend uses this stream to render a staged progress bar so users can see
+whether the app is fetching the article or converting it to speech, and how far
+along it is.
+
+Without the `Accept: text/event-stream` header, the endpoint keeps its original
+behavior and returns the audio directly as `audio/mpeg`.
+
 ## Local development
 
 ```bash
@@ -102,6 +124,8 @@ Optional:
 
 - `MAX_ARTICLE_CHARS` (default `12000`)
 - `DEFAULT_VOICE` (default `en-US-JennyNeural`)
+- `FETCH_TIMEOUT_MS` (default `20000`) — how long to wait when downloading the
+  article before returning a `504` timeout. Increase it for slow sites.
 
 ## Deployment
 
