@@ -2,6 +2,10 @@ name: Deploy App
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Deploy Infrastructure"]
+    types:
+      - completed
   push:
     branches: [main]
     paths:
@@ -24,6 +28,8 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # When triggered by the Deploy Infrastructure workflow, only run if it succeeded.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Checkout

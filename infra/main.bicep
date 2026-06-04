@@ -1,7 +1,8 @@
 param location string = resourceGroup().location
 param containerAppEnvName string = 'cae-articletts'
 param containerAppName string = 'ca-articletts'
-param image string
+@description('Container image to deploy. Defaults to a public bootstrap placeholder so the Container App can be created before the real private GHCR image exists. The deploy-app workflow swaps in the real image.')
+param image string = 'mcr.microsoft.com/k8se/quickstart:latest'
 param speechAccountName string = 'sp${take(uniqueString(subscription().id, resourceGroup().id), 20)}'
 param speechCustomSubdomain string = 'sp${take(uniqueString(resourceGroup().id, 'speech-subdomain'), 20)}'
 param maxReplicas int = 1

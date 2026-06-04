@@ -135,11 +135,32 @@ The infra workflow prints the correct FQDN after deployment.
 
 - `deploy-infra.yml`
   - Deploys Bicep infra
+  - Creates the Container App from a **public bootstrap image**
+    (`mcr.microsoft.com/k8se/quickstart:latest`) on first run so it does not depend
+    on the private app image existing yet
+  - Re-runs are **idempotent on the image**: if the Container App already exists, the
+    workflow preserves its current image instead of resetting it to the placeholder
   - Assigns Speech RBAC role to managed identity
   - Enables Container App built-in auth and configures Microsoft provider
 - `deploy-app.yml`
   - Builds and pushes container image to `ghcr.io`
-  - Updates the Container App image
+  - Updates the Container App image to the freshly built tag
+
+### First-time deployment order
+
+1. Run **Deploy Infrastructure** first (push to `infra/**` or trigger manually). This
+   creates the Container App with the public bootstrap image.
+2. **Deploy App** then runs automatically when Deploy Infrastructure completes
+   successfully (via `workflow_run`), or can be triggered manually. It builds/pushes
+   the real image and swaps the placeholder for the real image.
+
+### GHCR package visibility
+
+The image is published to `ghcr.io` and the package is **public**, so the Container App
+pulls it directly with no registry credentials required. If you later make the package
+private, you must configure pull credentials on the Container App
+(e.g. `az containerapp registry set --server ghcr.io ...` with a PAT that has
+`read:packages`).
 
 ## Usage
 
