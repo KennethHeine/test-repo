@@ -54,7 +54,7 @@ The same Node.js/TypeScript container serves static frontend files and API route
 - One **Azure AI Speech** resource (`SpeechServices`, F0)
   - custom subdomain endpoint
   - local key auth disabled (`disableLocalAuth: true`)
-- RBAC assignment:
+- RBAC assignment (declarative in Bicep):
   - Container App managed identity gets `Cognitive Services Speech User` on Speech resource
 - Built-in Container Apps authentication (Easy Auth) with Microsoft Entra ID:
   - Entra app registration + service principal created via the Microsoft Graph Bicep extension
@@ -117,7 +117,8 @@ The infra workflow deploys:
 - Container Apps environment
 - Container App (single container, ingress, scaling, managed identity)
 - Speech resource (F0 + custom subdomain)
-- Speech RBAC role assignment
+- Speech RBAC role assignment (`Cognitive Services Speech User` on the Speech
+  resource for the Container App managed identity)
 - Entra ID application + service principal for built-in auth, created declaratively
   via the Microsoft Graph Bicep extension
 - Easy Auth (built-in authentication) configured declaratively in Bicep
@@ -149,7 +150,7 @@ Container App FQDN.
     on the private app image existing yet
   - Re-runs are **idempotent on the image**: if the Container App already exists, the
     workflow preserves its current image instead of resetting it to the placeholder
-  - Assigns Speech RBAC role to managed identity
+  - Speech RBAC role assignment is provisioned declaratively by the Bicep template
   - Built-in auth (Entra app + service principal + Easy Auth) is provisioned
     declaratively by the Bicep template — no CLI auth step, no auth secrets
 - `deploy-app.yml`

@@ -106,6 +106,28 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
+// ---------------------------------------------------------------------------
+// RBAC: allow the Container App's system-assigned managed identity to call the
+// Speech resource using Microsoft Entra tokens (local key auth is disabled).
+//
+// Declared here so the role assignment is part of the infrastructure-as-code
+// instead of an imperative `az role assignment` step in the deploy workflow.
+// The deterministic guid name makes redeployments idempotent.
+// ---------------------------------------------------------------------------
+
+@description('Built-in "Cognitive Services Speech User" role definition ID.')
+var speechUserRoleDefinitionId = 'f2dc8367-1007-4938-bd23-fe263f013447'
+
+resource speechRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: speech
+  name: guid(speech.id, containerApp.id, speechUserRoleDefinitionId)
+  properties: {
+    principalId: containerApp.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', speechUserRoleDefinitionId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output containerAppName string = containerApp.name
 output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn
 output containerAppPrincipalId string = containerApp.identity.principalId
