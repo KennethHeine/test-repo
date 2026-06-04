@@ -29,6 +29,10 @@
       .progress-steps ul { margin: 0; padding: 0; }
       audio { width: 100%; margin-top: 0.75rem; }
       label { display: grid; gap: 0.35rem; }
+      #cost-estimate { margin: 0; padding: 0.55rem 0.75rem; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 0.5rem; color: #166534; font-size: 0.85rem; display: none; }
+      #cost-estimate.active { display: block; }
+      #cost-estimate.loading { background: #f8fafc; border-color: #cbd5e1; color: #64748b; }
+      #cost-estimate.warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
       #voice-info { margin: 0.25rem 0 0; padding: 0.6rem 0.75rem; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 0.5rem; color: #1e3a8a; font-size: 0.9rem; }
       #voice-info .badge { display: inline-block; margin-left: 0.4rem; padding: 0.05rem 0.4rem; border-radius: 0.35rem; background: #2563eb; color: #fff; font-size: 0.7rem; vertical-align: middle; }
       details.voice-guide { margin-top: 0.5rem; font-size: 0.9rem; color: #334155; }
@@ -45,6 +49,7 @@
           Article URL
           <input id="url" name="url" type="url" placeholder="https://example.com/article" required />
         </label>
+        <div id="cost-estimate"></div>
         <label>
           Voice
           <select id="voice" name="voice">
@@ -215,8 +220,75 @@
         }
       }
 
-      voiceSelect.addEventListener('change', updateVoiceInfo);
+      // --- Pricing constants (Azure pay-as-you-go, US region) ---
+      const VOICE_PRICES = { standard: 15, hd: 22 }; // USD per 1M chars
+      const F0_FREE_CHARS = 500_000; // chars free per month on F0 tier
+
+      function voicePriceTier(voice) {
+        return voice && voice.includes(':DragonHD') ? 'hd' : 'standard';
+      }
+
+      function formatCost(usd) {
+        if (usd === 0) return '$0';
+        if (usd < 0.001) return `~$${usd.toFixed(6)}`;
+        if (usd < 0.1)   return `~$${usd.toFixed(4)}`;
+        return `~$${usd.toFixed(2)}`;
+      }
+
+      const costEl = document.getElementById('cost-estimate');
+      let cachedPreviewChars = null;
+      let previewTimer = null;
+
+      function renderCostEstimate() {
+        if (cachedPreviewChars === null) { costEl.className = ''; return; }
+        const tier = voicePriceTier(voiceSelect.value);
+        const pricePerM = VOICE_PRICES[tier];
+        const cost = (cachedPreviewChars / 1_000_000) * pricePerM;
+        const tierLabel = tier === 'hd' ? 'HD Neural' : 'Standard Neural';
+        const freeNote = cachedPreviewChars <= F0_FREE_CHARS
+          ? `covered by F0 free tier (500K chars/mo)`
+          : `exceeds F0 free tier`;
+        costEl.className = cachedPreviewChars > F0_FREE_CHARS ? 'active warn' : 'active';
+        costEl.innerHTML =
+          `~<strong>${cachedPreviewChars.toLocaleString()}</strong> chars &nbsp;·&nbsp; ` +
+          `${formatCost(cost)} (${tierLabel} · $${pricePerM}/M) &nbsp;·&nbsp; ${freeNote}`;
+      }
+
+      async function fetchPreview(url) {
+        cachedPreviewChars = null;
+        if (!url) { costEl.className = ''; return; }
+        costEl.className = 'active loading';
+        costEl.textContent = 'Fetching article preview…';
+        try {
+          const resp = await fetch('/api/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+          });
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${resp.status}`);
+          }
+          const data = await resp.json();
+          cachedPreviewChars = data.chars;
+          renderCostEstimate();
+          if (data.truncated) {
+            costEl.innerHTML += ` <em>(article truncated to ${cachedPreviewChars.toLocaleString()} chars)</em>`;
+          }
+        } catch {
+          costEl.className = '';  // silently hide on failure
+        }
+      }
+
+      voiceSelect.addEventListener('change', () => { updateVoiceInfo(); renderCostEstimate(); });
       updateVoiceInfo();
+
+      document.getElementById('url').addEventListener('input', (e) => {
+        clearTimeout(previewTimer);
+        const url = e.target.value.trim();
+        if (!url) { cachedPreviewChars = null; costEl.className = ''; return; }
+        previewTimer = setTimeout(() => fetchPreview(url), 700);
+      });
 
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
