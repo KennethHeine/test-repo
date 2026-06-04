@@ -107,8 +107,8 @@ Optional:
 
 Files:
 
-- `/tmp/workspace/KennethHeine/test-repo/infra/main.bicep`
-- `/tmp/workspace/KennethHeine/test-repo/infra/main.parameters.json`
+- `infra/main.bicep`
+- `infra/main.parameters.json`
 
 The infra workflow deploys:
 

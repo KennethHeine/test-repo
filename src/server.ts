@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from 'express';
+import rateLimit from 'express-rate-limit';
 import { Readability } from '@mozilla/readability';
 import { JSDOM } from 'jsdom';
 import * as sdk from 'microsoft-cognitiveservices-speech-sdk';
@@ -85,6 +86,34 @@ async function validateExternalUrl(rawUrl: string): Promise<URL> {
   return parsed;
 }
 
+async function fetchArticleHtml(initialUrl: URL): Promise<{ html: string; finalUrl: URL }> {
+  let currentUrl = initialUrl;
+  for (let redirects = 0; redirects <= 3; redirects += 1) {
+    const response = await fetch(currentUrl, {
+      redirect: 'manual',
+      headers: { 'User-Agent': 'article-to-speech-app/1.0' }
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      if (!location) {
+        throw new Error('Article URL redirect is missing location');
+      }
+      const redirectedUrl = new URL(location, currentUrl);
+      currentUrl = await validateExternalUrl(redirectedUrl.toString());
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch article (${response.status})`);
+    }
+
+    return { html: await response.text(), finalUrl: currentUrl };
+  }
+
+  throw new Error('Too many redirects');
+}
+
 function escapeXml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -152,6 +181,20 @@ async function synthesizeSpeech(text: string, voiceName: string): Promise<Buffer
 app.use(express.json({ limit: '256kb' }));
 app.use(express.static(publicDir));
 
+const readLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 6,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+const staticLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ ok: true });
 });
@@ -164,7 +207,7 @@ app.get('/api/me', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/read', async (req: Request, res: Response) => {
+app.post('/api/read', readLimiter, async (req: Request, res: Response) => {
   try {
     const { url, voice, language } = req.body as { url?: string; voice?: string; language?: string };
     if (!url) {
@@ -173,18 +216,8 @@ app.post('/api/read', async (req: Request, res: Response) => {
     }
 
     const parsedUrl = await validateExternalUrl(url);
-    const response = await fetch(parsedUrl, {
-      redirect: 'follow',
-      headers: { 'User-Agent': 'article-to-speech-app/1.0' }
-    });
-
-    if (!response.ok) {
-      res.status(400).json({ error: `Failed to fetch article (${response.status})` });
-      return;
-    }
-
-    const html = await response.text();
-    const dom = new JSDOM(html, { url: parsedUrl.toString() });
+    const { html, finalUrl } = await fetchArticleHtml(parsedUrl);
+    const dom = new JSDOM(html, { url: finalUrl.toString() });
     const reader = new Readability(dom.window.document);
     const article = reader.parse();
 
@@ -203,7 +236,7 @@ app.post('/api/read', async (req: Request, res: Response) => {
   }
 });
 
-app.get('*', (_req: Request, res: Response) => {
+app.get('*', staticLimiter, (_req: Request, res: Response) => {
   res.sendFile(path.resolve(publicDir, 'index.html'));
 });
 

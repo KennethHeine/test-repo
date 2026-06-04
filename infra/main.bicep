@@ -1,7 +1,7 @@
 param location string = resourceGroup().location
 param containerAppEnvName string = 'cae-articletts'
 param containerAppName string = 'ca-articletts'
-param image string = 'ghcr.io/kennethheine/test-repo:latest'
+param image string
 param speechAccountName string = 'sp${take(uniqueString(subscription().id, resourceGroup().id), 20)}'
 param speechCustomSubdomain string = 'sp${take(uniqueString(resourceGroup().id, 'speech-subdomain'), 20)}'
 param maxReplicas int = 1

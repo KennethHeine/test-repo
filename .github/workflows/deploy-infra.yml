@@ -40,7 +40,8 @@ jobs:
               --resource-group "$RESOURCE_GROUP" \
               --name "$DEPLOYMENT_NAME" \
               --template-file infra/main.bicep \
-              --parameters @infra/main.parameters.json 1>/dev/null
+              --parameters @infra/main.parameters.json image="ghcr.io/${GITHUB_REPOSITORY,,}:latest" \
+              --only-show-errors
 
             containerAppName=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.containerAppName.value -o tsv)
             containerAppFqdn=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.containerAppFqdn.value -o tsv)
@@ -59,11 +60,22 @@ jobs:
         with:
           inlineScript: |
             set -euo pipefail
-            az role assignment create \
+            existing=$(az role assignment list \
               --assignee-object-id "${{ steps.deploy.outputs.containerAppPrincipalId }}" \
-              --assignee-principal-type ServicePrincipal \
               --scope "${{ steps.deploy.outputs.speechResourceId }}" \
-              --role "Cognitive Services Speech User" || true
+              --role "Cognitive Services Speech User" \
+              --query "length(@)" -o tsv)
+
+            if [ "$existing" = "0" ]; then
+              az role assignment create \
+                --assignee-object-id "${{ steps.deploy.outputs.containerAppPrincipalId }}" \
+                --assignee-principal-type ServicePrincipal \
+                --scope "${{ steps.deploy.outputs.speechResourceId }}" \
+                --role "Cognitive Services Speech User" \
+                --only-show-errors
+            else
+              echo "Role assignment already exists."
+            fi
 
       - name: Configure Container App built-in auth (Entra single-tenant)
         uses: azure/cli@v2
