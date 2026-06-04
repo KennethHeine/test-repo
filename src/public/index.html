@@ -38,9 +38,25 @@
       details.voice-guide { margin-top: 0.5rem; font-size: 0.9rem; color: #334155; }
       details.voice-guide ul { margin: 0.5rem 0 0; padding-left: 1.2rem; }
       details.voice-guide summary { cursor: pointer; font-weight: 600; }
+      /* Usage bar */
+      #usage-banner { position: sticky; top: 0; z-index: 100; background: #fff; border-bottom: 1px solid #e2e8f0; padding: 0.45rem 1rem; font-size: 0.8rem; color: #475569; }
+      .usage-inner { max-width: 640px; margin: 0 auto; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+      .usage-label { font-weight: 600; white-space: nowrap; color: #1e293b; }
+      .usage-track { flex: 1; min-width: 80px; height: 0.5rem; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
+      .usage-fill { height: 100%; width: 0%; border-radius: 999px; transition: width 0.4s ease, background 0.4s ease; background: #22c55e; }
+      .usage-fill.warn  { background: #f59e0b; }
+      .usage-fill.crit  { background: #ef4444; }
+      .usage-detail { white-space: nowrap; color: #64748b; }
     </style>
   </head>
   <body>
+    <div id="usage-banner">
+      <div class="usage-inner">
+        <span class="usage-label">F0 free tier</span>
+        <div class="usage-track"><div class="usage-fill" id="usage-fill"></div></div>
+        <span class="usage-detail" id="usage-detail">loading…</span>
+      </div>
+    </div>
     <main>
       <h1>Article to Speech</h1>
       <p>Paste an article URL and generate audio.</p>
@@ -220,6 +236,25 @@
         }
       }
 
+      // --- Usage bar ---
+      const usageFill = document.getElementById('usage-fill');
+      const usageDetail = document.getElementById('usage-detail');
+
+      async function refreshUsage() {
+        try {
+          const data = await fetch('/api/usage').then(r => r.json());
+          const pct = data.percent ?? 0;
+          usageFill.style.width = pct + '%';
+          usageFill.className = 'usage-fill' + (pct >= 90 ? ' crit' : pct >= 70 ? ' warn' : '');
+          const used = (data.chars ?? 0).toLocaleString();
+          const free = (data.free ?? 500000).toLocaleString();
+          usageDetail.textContent = `${used} / ${free} chars (${pct}%) — ${data.month ?? ''}`;
+        } catch {
+          usageDetail.textContent = '';
+        }
+      }
+      refreshUsage();
+
       // --- Pricing constants (Azure pay-as-you-go, US region) ---
       const VOICE_PRICES = { standard: 15, hd: 22 }; // USD per 1M chars
       const F0_FREE_CHARS = 500_000; // chars free per month on F0 tier
@@ -344,6 +379,7 @@
 
           showProgress(false);
           statusEl.textContent = 'Done. Tap play if audio does not autoplay.';
+          refreshUsage();
         } catch (error) {
           showProgress(false);
           statusEl.textContent = error.message || 'Failed to generate audio.';
