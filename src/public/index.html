@@ -48,35 +48,36 @@
         <label>
           Voice
           <select id="voice" name="voice">
+            <optgroup label="English (US) — Standard neural">
+              <option value="en-US-JennyNeural"
+                selected
+                data-recommended="true"
+                data-info="Reliable, friendly female voice. Available in every Azure region — safe default.">
+                en-US-Jenny (Recommended)
+              </option>
+              <option value="en-US-GuyNeural"
+                data-info="Reliable male voice. Available in every Azure region.">
+                en-US-Guy
+              </option>
+            </optgroup>
             <optgroup label="English (US) — Highest quality (HD)">
               <option value="en-US-Ava:DragonHDLatestNeural"
-                data-recommended="true"
-                data-info="Best overall quality: Azure's newest HD voice. Ultra-natural, expressive female narration. Ideal for long articles.">
+                data-info="Best overall quality: Azure's newest HD voice. Ultra-natural, expressive female narration. Ideal for long articles. Availability depends on the Azure region.">
                 en-US-Ava (HD) — most natural
               </option>
               <option value="en-US-Andrew:DragonHDLatestNeural"
-                data-info="HD male voice. Warm, natural, studio-grade quality. Great for long-form narration.">
+                data-info="HD male voice. Warm, natural, studio-grade quality. Great for long-form narration. Availability depends on the Azure region.">
                 en-US-Andrew (HD) — natural male
               </option>
             </optgroup>
             <optgroup label="English (US) — Multilingual">
               <option value="en-US-AvaMultilingualNeural"
-                data-info="Very natural female voice that also pronounces other languages well. A great default.">
+                data-info="Very natural female voice that also pronounces other languages well.">
                 en-US-Ava (Multilingual)
               </option>
               <option value="en-US-AndrewMultilingualNeural"
                 data-info="Natural male voice with strong multilingual pronunciation.">
                 en-US-Andrew (Multilingual)
-              </option>
-            </optgroup>
-            <optgroup label="English (US) — Standard neural">
-              <option value="en-US-JennyNeural"
-                data-info="Reliable, friendly female voice. Widely supported in every region — safe default.">
-                en-US-Jenny
-              </option>
-              <option value="en-US-GuyNeural"
-                data-info="Reliable male voice. Widely supported in every region.">
-                en-US-Guy
               </option>
             </optgroup>
             <optgroup label="Norwegian (Bokmål)">
@@ -95,9 +96,9 @@
         <details class="voice-guide">
           <summary>Which voice should I pick?</summary>
           <ul>
-            <li><strong>Best quality:</strong> the <strong>HD</strong> voices (e.g. <em>en-US-Ava (HD)</em>) sound the most human and are ideal for long articles. Availability can depend on the Azure region.</li>
+            <li><strong>Best compatibility:</strong> <strong>Jenny</strong> and <strong>Guy</strong> (standard neural) work in every region — use these if you're unsure.</li>
+            <li><strong>Best quality:</strong> the <strong>HD</strong> voices sound the most human and are ideal for long articles, but availability depends on the Azure region.</li>
             <li><strong>Multiple languages in one article:</strong> pick a <strong>Multilingual</strong> voice — it pronounces foreign names and phrases more accurately.</li>
-            <li><strong>Maximum compatibility:</strong> the <strong>standard neural</strong> voices (Jenny, Guy) work in every region.</li>
             <li><strong>Norwegian content:</strong> use a <strong>nb-NO</strong> voice (Pernille or Finn).</li>
           </ul>
         </details>
