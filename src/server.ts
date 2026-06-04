@@ -10,21 +10,37 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const app = express();
+app.set('trust proxy', 1);
 const credential = new DefaultAzureCredential();
 const port = Number(process.env.PORT ?? 8080);
 const speechEndpoint = process.env.SPEECH_ENDPOINT;
 const speechResourceId = process.env.SPEECH_RESOURCE_ID;
 const maxCharacters = Number(process.env.MAX_ARTICLE_CHARS ?? 12000);
 const defaultVoice = process.env.DEFAULT_VOICE ?? 'en-US-JennyNeural';
+const fetchTimeoutMs = Number(process.env.FETCH_TIMEOUT_MS ?? 10_000);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, 'public');
 
 const BLOCKED_HOSTS = new Set(['localhost', 'metadata.azure.internal']);
+
+class HttpError extends Error {
+  constructor(
+    readonly statusCode: number,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
 function isBlockedIp(ip: string): boolean {
   const normalized = ip.toLowerCase();
-  if (normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80:')) {
+  if (normalized === '::' || normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80:')) {
     return true;
+  }
+
+  if (normalized.startsWith('::ffff:')) {
+    return isBlockedIp(normalized.slice(7));
   }
 
   if (!net.isIPv4(normalized)) {
@@ -62,25 +78,25 @@ async function validateExternalUrl(rawUrl: string): Promise<URL> {
   try {
     parsed = new URL(rawUrl);
   } catch {
-    throw new Error('Invalid URL');
+    throw new HttpError(400, 'Invalid URL');
   }
 
   if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error('Only http/https URLs are allowed');
+    throw new HttpError(400, 'Only http/https URLs are allowed');
   }
 
   const hostname = parsed.hostname.toLowerCase();
   if (!hostname || BLOCKED_HOSTS.has(hostname)) {
-    throw new Error('URL host is not allowed');
+    throw new HttpError(400, 'URL host is not allowed');
   }
 
   if (net.isIP(hostname) && isBlockedIp(hostname)) {
-    throw new Error('URL resolves to a private or local IP');
+    throw new HttpError(400, 'URL resolves to a private or local IP');
   }
 
   const records = await dns.lookup(hostname, { all: true });
   if (records.some((record) => isBlockedIp(record.address))) {
-    throw new Error('URL resolves to a private or local IP');
+    throw new HttpError(400, 'URL resolves to a private or local IP');
   }
 
   return parsed;
@@ -89,15 +105,24 @@ async function validateExternalUrl(rawUrl: string): Promise<URL> {
 async function fetchArticleHtml(initialUrl: URL): Promise<{ html: string; finalUrl: URL }> {
   let currentUrl = initialUrl;
   for (let redirects = 0; redirects <= 3; redirects += 1) {
-    const response = await fetch(currentUrl, {
-      redirect: 'manual',
-      headers: { 'User-Agent': 'article-to-speech-app/1.0' }
-    });
+    let response: globalThis.Response;
+    try {
+      response = await fetch(currentUrl, {
+        redirect: 'manual',
+        headers: { 'User-Agent': 'article-to-speech-app/1.0' },
+        signal: AbortSignal.timeout(fetchTimeoutMs)
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'TimeoutError') {
+        throw new HttpError(504, 'Timed out fetching article');
+      }
+      throw error;
+    }
 
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location');
       if (!location) {
-        throw new Error('Article URL redirect is missing location');
+        throw new HttpError(502, 'Article URL redirect is missing location');
       }
       const redirectedUrl = new URL(location, currentUrl);
       currentUrl = await validateExternalUrl(redirectedUrl.toString());
@@ -105,13 +130,13 @@ async function fetchArticleHtml(initialUrl: URL): Promise<{ html: string; finalU
     }
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch article (${response.status})`);
+      throw new HttpError(502, `Failed to fetch article (${response.status})`);
     }
 
     return { html: await response.text(), finalUrl: currentUrl };
   }
 
-  throw new Error('Too many redirects');
+  throw new HttpError(502, 'Too many redirects');
 }
 
 function escapeXml(text: string): string {
@@ -178,9 +203,6 @@ async function synthesizeSpeech(text: string, voiceName: string): Promise<Buffer
   });
 }
 
-app.use(express.json({ limit: '256kb' }));
-app.use(express.static(publicDir));
-
 const readLimiter = rateLimit({
   windowMs: 60_000,
   max: 6,
@@ -194,6 +216,9 @@ const staticLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+
+app.use(express.json({ limit: '256kb' }));
+app.use(staticLimiter, express.static(publicDir, { index: false }));
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ ok: true });
@@ -231,8 +256,12 @@ app.post('/api/read', readLimiter, async (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'audio/mpeg');
     res.send(audio);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unexpected error';
-    res.status(400).json({ error: message });
+    if (error instanceof HttpError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
