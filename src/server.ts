@@ -105,9 +105,10 @@ async function validateExternalUrl(rawUrl: string): Promise<URL> {
 async function fetchArticleHtml(initialUrl: URL): Promise<{ html: string; finalUrl: URL }> {
   let currentUrl = initialUrl;
   for (let redirects = 0; redirects <= 3; redirects += 1) {
+    const safeUrl = await validateExternalUrl(currentUrl.toString());
     let response: globalThis.Response;
     try {
-      response = await fetch(currentUrl, {
+      response = await fetch(safeUrl, {
         redirect: 'manual',
         headers: { 'User-Agent': 'article-to-speech-app/1.0' },
         signal: AbortSignal.timeout(fetchTimeoutMs)
@@ -124,7 +125,7 @@ async function fetchArticleHtml(initialUrl: URL): Promise<{ html: string; finalU
       if (!location) {
         throw new HttpError(502, 'Article URL redirect is missing location');
       }
-      const redirectedUrl = new URL(location, currentUrl);
+      const redirectedUrl = new URL(location, safeUrl);
       currentUrl = await validateExternalUrl(redirectedUrl.toString());
       continue;
     }
@@ -133,7 +134,7 @@ async function fetchArticleHtml(initialUrl: URL): Promise<{ html: string; finalU
       throw new HttpError(502, `Failed to fetch article (${response.status})`);
     }
 
-    return { html: await response.text(), finalUrl: currentUrl };
+    return { html: await response.text(), finalUrl: safeUrl };
   }
 
   throw new HttpError(502, 'Too many redirects');
