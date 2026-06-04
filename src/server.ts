@@ -5,10 +5,30 @@ import { JSDOM } from 'jsdom';
 import * as sdk from 'microsoft-cognitiveservices-speech-sdk';
 import { DefaultAzureCredential } from '@azure/identity';
 import { TableClient } from '@azure/data-tables';
+import { BlobServiceClient, type ContainerClient } from '@azure/storage-blob';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// ---------------------------------------------------------------------------
+// Structured logging
+// ---------------------------------------------------------------------------
+type LogLevel = 'info' | 'warn' | 'error';
+
+function log(level: LogLevel, message: string, extra?: unknown): void {
+  const ts = new Date().toISOString();
+  const suffix =
+    extra instanceof Error
+      ? ` — ${extra.message}\n${extra.stack}`
+      : extra !== undefined
+        ? ` — ${JSON.stringify(extra)}`
+        : '';
+  const line = `[${ts}] [${level.toUpperCase()}] ${message}${suffix}`;
+  if (level === 'error') console.error(line);
+  else if (level === 'warn') console.warn(line);
+  else console.log(line);
+}
 
 const app = express();
 app.set('trust proxy', 1);
@@ -17,13 +37,17 @@ const port = Number(process.env.PORT ?? 8080);
 const speechEndpoint = process.env.SPEECH_ENDPOINT;
 const speechResourceId = process.env.SPEECH_RESOURCE_ID;
 const speechRegion = process.env.SPEECH_REGION;
-const maxCharacters = Number(process.env.MAX_ARTICLE_CHARS ?? 5000);
+// Each TTS WebSocket session has a hard 600-second limit. At ~750 chars/min
+// (150 wpm × 5 chars/word) that means ~7,500 chars max per call. We use
+// 4,500 to stay comfortably under the limit; longer articles are split into
+// multiple chunks that are synthesised sequentially then concatenated.
+const CHUNK_SIZE = 4_500;
+const maxCharacters = Number(process.env.MAX_ARTICLE_CHARS ?? 50_000);
 const defaultVoice = process.env.DEFAULT_VOICE ?? 'en-US-JennyNeural';
 
 // ---------------------------------------------------------------------------
 // Monthly character usage — persisted in Azure Table Storage.
-// Falls back to in-memory when AZURE_STORAGE_ACCOUNT_URL is not set (local
-// dev without storage).
+// Falls back to in-memory when AZURE_STORAGE_ACCOUNT_URL is not set.
 // ---------------------------------------------------------------------------
 const FREE_TIER_CHARS = 500_000;
 const USAGE_TABLE = 'usage';
@@ -33,15 +57,13 @@ function currentMonth(): string {
   return new Date().toISOString().slice(0, 7); // "YYYY-MM"
 }
 
-// Initialise TableClient once. On startup, create the table if it doesn't
-// exist (idempotent — returns 409 Conflict which we ignore).
 let tableClient: TableClient | null = null;
 if (process.env.AZURE_STORAGE_ACCOUNT_URL) {
   tableClient = new TableClient(process.env.AZURE_STORAGE_ACCOUNT_URL, USAGE_TABLE, credential);
   tableClient.createTable().catch(() => { /* table already exists */ });
+  log('info', 'Table Storage connected', { url: process.env.AZURE_STORAGE_ACCOUNT_URL });
 }
 
-// In-memory fallback used only when storage is not configured.
 let memUsage = { month: currentMonth(), chars: 0 };
 
 interface UsageStats { month: string; chars: number; free: number; percent: number }
@@ -70,7 +92,7 @@ async function recordUsage(chars: number): Promise<void> {
       await tableClient.createEntity(updated);
     }
   } catch (e) {
-    console.warn('[usage] Failed to record usage:', e);
+    log('warn', 'Failed to record usage', e instanceof Error ? e : new Error(String(e)));
   }
 }
 
@@ -92,7 +114,66 @@ async function getUsageStats(): Promise<UsageStats> {
     throw e;
   }
 }
-
+
+// ---------------------------------------------------------------------------
+// Audio recordings — persisted in Azure Blob Storage (container: recordings).
+// ---------------------------------------------------------------------------
+const RECORDINGS_CONTAINER = 'recordings';
+let recordingsContainer: ContainerClient | null = null;
+
+if (process.env.AZURE_STORAGE_BLOB_URL) {
+  const blobService = new BlobServiceClient(process.env.AZURE_STORAGE_BLOB_URL, credential);
+  recordingsContainer = blobService.getContainerClient(RECORDINGS_CONTAINER);
+  recordingsContainer
+    .createIfNotExists()
+    .then(() => log('info', 'Blob recordings container ready'))
+    .catch((e: unknown) => log('warn', 'Could not create recordings container', e instanceof Error ? e : new Error(String(e))));
+}
+
+interface RecordingMeta {
+  name: string;
+  title: string;
+  voice: string;
+  chars: number;
+  chunks: number;
+  articleUrl: string;
+  createdAt: string;
+  sizeBytes: number;
+}
+
+function makeSlug(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'article';
+}
+
+function makeBlobName(title: string): string {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19); // "2026-06-04T21-00-00"
+  return `${ts}-${makeSlug(title)}.mp3`;
+}
+
+async function uploadRecording(
+  audio: Buffer,
+  blobName: string,
+  meta: Pick<RecordingMeta, 'title' | 'voice' | 'chars' | 'chunks' | 'articleUrl'>
+): Promise<void> {
+  if (!recordingsContainer) return;
+  try {
+    const blockBlob = recordingsContainer.getBlockBlobClient(blobName);
+    await blockBlob.upload(audio, audio.length, {
+      blobHTTPHeaders: { blobContentType: 'audio/mpeg' },
+      metadata: {
+        title: meta.title.slice(0, 512),
+        voice: meta.voice,
+        chars: String(meta.chars),
+        chunks: String(meta.chunks),
+        articleurl: meta.articleUrl.slice(0, 512)
+      }
+    });
+    log('info', 'Recording uploaded', { blobName, chars: meta.chars, bytes: audio.length });
+  } catch (e) {
+    log('warn', 'Failed to upload recording', e instanceof Error ? e : new Error(String(e)));
+  }
+}
+
 const fetchTimeoutMs = Number(process.env.FETCH_TIMEOUT_MS ?? 20_000);
 
 // A browser-like User-Agent and Accept headers reduce the chance that sites
@@ -245,6 +326,38 @@ function cleanArticleText(input: string): string {
   return input.replace(/\s+/g, ' ').trim().slice(0, maxCharacters);
 }
 
+// Split text into chunks at sentence boundaries so each TTS call is within
+// the Azure 600-second WebSocket session limit (CHUNK_SIZE chars ≈ 6 min).
+function splitIntoChunks(text: string): string[] {
+  if (text.length <= CHUNK_SIZE) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= CHUNK_SIZE) {
+      chunks.push(remaining);
+      break;
+    }
+    const slice = remaining.slice(0, CHUNK_SIZE);
+    // Prefer splitting at the last sentence-ending punctuation followed by a space.
+    const sentenceEnd = Math.max(
+      slice.lastIndexOf('. '),
+      slice.lastIndexOf('! '),
+      slice.lastIndexOf('? '),
+      slice.lastIndexOf('.\n'),
+      slice.lastIndexOf('!\n'),
+      slice.lastIndexOf('?\n')
+    );
+    // Fall back to last space if no sentence boundary found in the latter half.
+    const splitAt =
+      sentenceEnd > CHUNK_SIZE * 0.5
+        ? sentenceEnd + 1
+        : (slice.lastIndexOf(' ') > 0 ? slice.lastIndexOf(' ') : CHUNK_SIZE);
+    chunks.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
+  }
+  return chunks;
+}
+
 function pickVoice(voice?: string, language?: string): string {
   if (voice?.trim()) {
     return voice.trim();
@@ -301,7 +414,13 @@ async function synthesizeSpeech(
         if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
           resolve(Buffer.from(result.audioData));
         } else {
-          reject(new Error(result.errorDetails || 'Speech synthesis failed'));
+          const details = result.errorDetails ?? 'Speech synthesis failed';
+          // Give a user-friendly message for the most common failures.
+          if (details.includes('Unsupported voice') || details.includes('1007')) {
+            reject(new HttpError(422, `Voice "${voiceName}" is not available in this region. Please choose a different voice.`));
+          } else {
+            reject(new Error(details));
+          }
         }
         synthesizer.close();
       },
@@ -337,6 +456,16 @@ const staticLimiter = rateLimit({
 app.use(express.json({ limit: '256kb' }));
 app.use(staticLimiter, express.static(publicDir));
 
+// Request logger — logs method, path, status and duration for every request.
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    log('info', `${req.method} ${req.path} → ${res.statusCode} (${ms}ms)`);
+  });
+  next();
+});
+
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ ok: true });
 });
@@ -353,8 +482,97 @@ app.get('/api/usage', async (_req: Request, res: Response) => {
   try {
     res.json(await getUsageStats());
   } catch (e) {
-    console.error('[api/usage error]', e);
+    log('error', '/api/usage error', e instanceof Error ? e : new Error(String(e)));
     res.json({ month: currentMonth(), chars: 0, free: FREE_TIER_CHARS, percent: 0 });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Recordings API
+// ---------------------------------------------------------------------------
+
+const recordingsLimiter = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false });
+
+app.get('/api/recordings', recordingsLimiter, async (_req: Request, res: Response) => {
+  if (!recordingsContainer) {
+    res.json([]);
+    return;
+  }
+  try {
+    const items: RecordingMeta[] = [];
+    for await (const blob of recordingsContainer.listBlobsFlat({ includeMetadata: true })) {
+      const m = blob.metadata ?? {};
+      items.push({
+        name: blob.name,
+        title: m['title'] ?? blob.name,
+        voice: m['voice'] ?? '',
+        chars: Number(m['chars'] ?? 0),
+        chunks: Number(m['chunks'] ?? 1),
+        articleUrl: m['articleurl'] ?? '',
+        createdAt: blob.properties.createdOn?.toISOString() ?? '',
+        sizeBytes: blob.properties.contentLength ?? 0
+      });
+    }
+    // Newest first
+    items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    res.json(items);
+  } catch (e) {
+    log('error', '/api/recordings list error', e instanceof Error ? e : new Error(String(e)));
+    res.status(500).json({ error: 'Failed to list recordings' });
+  }
+});
+
+app.get('/api/recordings/:name/audio', recordingsLimiter, async (req: Request, res: Response) => {
+  const { name } = req.params;
+  // Sanitize: only allow safe blob names (no path traversal)
+  if (!name || !/^[\w\-]+\.mp3$/.test(name)) {
+    res.status(400).json({ error: 'Invalid recording name' });
+    return;
+  }
+  if (!recordingsContainer) {
+    res.status(503).json({ error: 'Storage not configured' });
+    return;
+  }
+  try {
+    const blobClient = recordingsContainer.getBlobClient(name);
+    const props = await blobClient.getProperties();
+    const download = await blobClient.download();
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', String(props.contentLength ?? 0));
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    download.readableStreamBody?.pipe(res);
+  } catch (e: unknown) {
+    if ((e as { statusCode?: number }).statusCode === 404) {
+      res.status(404).json({ error: 'Recording not found' });
+    } else {
+      log('error', `/api/recordings/${name}/audio error`, e instanceof Error ? e : new Error(String(e)));
+      res.status(500).json({ error: 'Failed to stream recording' });
+    }
+  }
+});
+
+app.delete('/api/recordings/:name', recordingsLimiter, async (req: Request, res: Response) => {
+  const { name } = req.params;
+  if (!name || !/^[\w\-]+\.mp3$/.test(name)) {
+    res.status(400).json({ error: 'Invalid recording name' });
+    return;
+  }
+  if (!recordingsContainer) {
+    res.status(503).json({ error: 'Storage not configured' });
+    return;
+  }
+  try {
+    await recordingsContainer.getBlobClient(name).delete();
+    log('info', 'Recording deleted', { name });
+    res.json({ ok: true });
+  } catch (e: unknown) {
+    if ((e as { statusCode?: number }).statusCode === 404) {
+      res.status(404).json({ error: 'Recording not found' });
+    } else {
+      log('error', `DELETE /api/recordings/${name} error`, e instanceof Error ? e : new Error(String(e)));
+      res.status(500).json({ error: 'Failed to delete recording' });
+    }
   }
 });
 
@@ -374,21 +592,19 @@ app.post('/api/preview', previewLimiter, async (req: Request, res: Response) => 
     const parsedUrl = await validateExternalUrl(url);
     const { html, finalUrl } = await fetchArticleHtml(parsedUrl);
     const dom = new JSDOM(html, { url: finalUrl.toString() });
-    const reader = new Readability(dom.window.document);
-    const article = reader.parse();
+    const article = new Readability(dom.window.document).parse();
     const rawText = (article?.textContent ?? '').replace(/\s+/g, ' ').trim();
-    const result: PreviewResult = {
+    res.json({
       chars: Math.min(rawText.length, maxCharacters),
       truncated: rawText.length > maxCharacters,
       title: article?.title ?? null
-    };
-    res.json(result);
+    } satisfies PreviewResult);
   } catch (error) {
     if (error instanceof HttpError) {
       res.status(error.statusCode).json({ error: error.message });
       return;
     }
-    console.error('[api/preview error]', error);
+    log('error', '/api/preview error', error instanceof Error ? error : new Error(String(error)));
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -401,13 +617,11 @@ interface ProgressEvent {
   message: string;
 }
 
-// Overall progress is split into weighted phases so the client can render a
-// single smooth progress bar across the whole article-to-speech pipeline.
 const STAGE_RANGES: Record<Exclude<ProgressStage, 'done'>, [number, number]> = {
-  validating: [0, 0.1],
-  fetching: [0.1, 0.35],
-  extracting: [0.35, 0.45],
-  synthesizing: [0.45, 1]
+  validating: [0, 0.05],
+  fetching: [0.05, 0.2],
+  extracting: [0.2, 0.25],
+  synthesizing: [0.25, 0.95]
 };
 
 function stageProgress(stage: Exclude<ProgressStage, 'done'>, fraction = 0): number {
@@ -416,8 +630,6 @@ function stageProgress(stage: Exclude<ProgressStage, 'done'>, fraction = 0): num
   return Number((start + (end - start) * clamped).toFixed(4));
 }
 
-// Minimum change in overall progress before a new synthesis update is streamed,
-// to avoid flooding the client with tiny, indistinguishable increments.
 const MIN_PROGRESS_DELTA = 0.01;
 
 interface ReadRequest {
@@ -429,10 +641,8 @@ interface ReadRequest {
 async function generateArticleAudio(
   { url, voice, language }: ReadRequest,
   onProgress: (event: ProgressEvent) => void
-): Promise<Buffer> {
-  if (!url) {
-    throw new HttpError(400, 'url is required');
-  }
+): Promise<{ audio: Buffer; recordingName: string | null }> {
+  if (!url) throw new HttpError(400, 'url is required');
 
   onProgress({ stage: 'validating', progress: stageProgress('validating'), message: 'Checking the URL…' });
   const parsedUrl = await validateExternalUrl(url);
@@ -442,25 +652,40 @@ async function generateArticleAudio(
 
   onProgress({ stage: 'extracting', progress: stageProgress('extracting'), message: 'Extracting readable text…' });
   const dom = new JSDOM(html, { url: finalUrl.toString() });
-  const reader = new Readability(dom.window.document);
-  const article = reader.parse();
-
+  const article = new Readability(dom.window.document).parse();
+  const title = article?.title ?? 'Untitled article';
   const text = cleanArticleText(article?.textContent ?? '');
-  if (!text) {
-    throw new HttpError(422, 'Could not extract readable article text');
+  if (!text) throw new HttpError(422, 'Could not extract readable article text');
+
+  const selectedVoice = pickVoice(voice, language);
+  const chunks = splitIntoChunks(text);
+  log('info', 'Starting synthesis', { url, title, chars: text.length, chunks: chunks.length, voice: selectedVoice });
+
+  const audioParts: Buffer[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkMsg = chunks.length > 1
+      ? `Converting to speech (chunk ${i + 1} of ${chunks.length})…`
+      : 'Converting text to speech…';
+    onProgress({ stage: 'synthesizing', progress: stageProgress('synthesizing', i / chunks.length), message: chunkMsg });
+
+    const part = await synthesizeSpeech(chunks[i], selectedVoice, (fraction) => {
+      const overall = (i + fraction) / chunks.length;
+      onProgress({ stage: 'synthesizing', progress: stageProgress('synthesizing', overall), message: chunkMsg });
+    });
+    audioParts.push(part);
+    log('info', `Chunk ${i + 1}/${chunks.length} done`, { chars: chunks[i].length, bytes: part.length });
   }
 
-  onProgress({ stage: 'synthesizing', progress: stageProgress('synthesizing'), message: 'Converting text to speech…' });
-  const audio = await synthesizeSpeech(text, pickVoice(voice, language), (fraction) => {
-    onProgress({
-      stage: 'synthesizing',
-      progress: stageProgress('synthesizing', fraction),
-      message: 'Converting text to speech…'
-    });
-  });
+  const audio = audioParts.length === 1 ? audioParts[0] : Buffer.concat(audioParts);
+  log('info', 'Synthesis complete', { chars: text.length, chunks: chunks.length, totalBytes: audio.length });
 
   await recordUsage(text.length);
-  return audio;
+
+  // Upload to blob storage (non-blocking — failure is logged but doesn't break the response).
+  const blobName = makeBlobName(title);
+  await uploadRecording(audio, blobName, { title, voice: selectedVoice, chars: text.length, chunks: chunks.length, articleUrl: url });
+
+  return { audio, recordingName: recordingsContainer ? blobName : null };
 }
 
 app.post('/api/read', readLimiter, async (req: Request, res: Response) => {
@@ -469,7 +694,7 @@ app.post('/api/read', readLimiter, async (req: Request, res: Response) => {
 
   if (!wantsStream) {
     try {
-      const audio = await generateArticleAudio(body, () => {});
+      const { audio } = await generateArticleAudio(body, () => {});
       res.setHeader('Content-Type', 'audio/mpeg');
       res.send(audio);
     } catch (error) {
@@ -477,7 +702,7 @@ app.post('/api/read', readLimiter, async (req: Request, res: Response) => {
         res.status(error.statusCode).json({ error: error.message });
         return;
       }
-      console.error('[api/read error]', error);
+      log('error', '/api/read error', error instanceof Error ? error : new Error(String(error)));
       res.status(500).json({ error: 'Internal server error' });
     }
     return;
@@ -496,23 +721,19 @@ app.post('/api/read', readLimiter, async (req: Request, res: Response) => {
   let lastProgress = -1;
 
   try {
-    const audio = await generateArticleAudio(body, (event) => {
-      // Avoid flooding the stream with tiny, indistinguishable updates.
-      if (event.progress - lastProgress < MIN_PROGRESS_DELTA && event.stage === 'synthesizing') {
-        return;
-      }
+    const { audio, recordingName } = await generateArticleAudio(body, (event) => {
+      if (event.progress - lastProgress < MIN_PROGRESS_DELTA && event.stage === 'synthesizing') return;
       lastProgress = event.progress;
       send('progress', event);
     });
 
     send('progress', { stage: 'done', progress: 1, message: 'Done.' });
-    send('audio', { contentType: 'audio/mpeg', audio: audio.toString('base64') });
+    send('audio', { contentType: 'audio/mpeg', audio: audio.toString('base64'), recordingName });
   } catch (error) {
     const statusCode = error instanceof HttpError ? error.statusCode : 500;
-    const message =
-      error instanceof HttpError ? error.message : 'Internal server error';
+    const message = error instanceof HttpError ? error.message : 'Internal server error';
     if (!(error instanceof HttpError)) {
-      console.error('[api/read SSE error]', error);
+      log('error', '/api/read SSE error', error instanceof Error ? error : new Error(String(error)));
     }
     send('error', { statusCode, error: message });
   } finally {
@@ -525,5 +746,5 @@ app.get('*', staticLimiter, (_req: Request, res: Response) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+  log('info', `listening on port ${port}`);
 });

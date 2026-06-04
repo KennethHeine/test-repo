@@ -47,6 +47,17 @@
       .usage-fill.warn  { background: #f59e0b; }
       .usage-fill.crit  { background: #ef4444; }
       .usage-detail { white-space: nowrap; color: #64748b; }
+      /* Recordings */
+      #recordings-section { margin-top: 2rem; border-top: 1px solid #e2e8f0; padding-top: 1.25rem; }
+      #recordings-section h2 { font-size: 1.1rem; margin: 0 0 0.75rem; color: #1e293b; }
+      .recording-item { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.75rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.5rem; margin-bottom: 0.6rem; }
+      .recording-title { font-weight: 600; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .recording-meta { font-size: 0.8rem; color: #64748b; }
+      .recording-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+      .recording-actions audio { flex: 1; min-width: 200px; height: 2rem; }
+      .btn-delete { background: none; border: 1px solid #fca5a5; color: #dc2626; border-radius: 0.4rem; padding: 0.2rem 0.6rem; font-size: 0.8rem; cursor: pointer; white-space: nowrap; }
+      .btn-delete:hover { background: #fee2e2; }
+      #recordings-empty { color: #94a3b8; font-size: 0.9rem; padding: 0.5rem 0; }
     </style>
   </head>
   <body>
@@ -81,16 +92,6 @@
                 en-US-Guy
               </option>
             </optgroup>
-            <optgroup label="English (US) — Highest quality (HD)">
-              <option value="en-US-Ava:DragonHDLatestNeural"
-                data-info="Best overall quality: Azure's newest HD voice. Ultra-natural, expressive female narration. Ideal for long articles. Availability depends on the Azure region.">
-                en-US-Ava (HD) — most natural
-              </option>
-              <option value="en-US-Andrew:DragonHDLatestNeural"
-                data-info="HD male voice. Warm, natural, studio-grade quality. Great for long-form narration. Availability depends on the Azure region.">
-                en-US-Andrew (HD) — natural male
-              </option>
-            </optgroup>
             <optgroup label="English (US) — Multilingual">
               <option value="en-US-AvaMultilingualNeural"
                 data-info="Very natural female voice that also pronounces other languages well.">
@@ -117,10 +118,9 @@
         <details class="voice-guide">
           <summary>Which voice should I pick?</summary>
           <ul>
-            <li><strong>Best compatibility:</strong> <strong>Jenny</strong> and <strong>Guy</strong> (standard neural) work in every region — use these if you're unsure.</li>
-            <li><strong>Best quality:</strong> the <strong>HD</strong> voices sound the most human and are ideal for long articles, but availability depends on the Azure region.</li>
-            <li><strong>Multiple languages in one article:</strong> pick a <strong>Multilingual</strong> voice — it pronounces foreign names and phrases more accurately.</li>
-            <li><strong>Norwegian content:</strong> use a <strong>nb-NO</strong> voice (Pernille or Finn).</li>
+            <li><strong>Best compatibility:</strong> <strong>Jenny</strong> and <strong>Guy</strong> (standard neural) work in every region — safe defaults.</li>
+              <li><strong>Multiple languages in one article:</strong> pick a <strong>Multilingual</strong> voice — it pronounces foreign names and phrases more accurately.</li>
+              <li><strong>Norwegian content:</strong> use a <strong>nb-NO</strong> voice (Pernille or Finn).</li>
           </ul>
         </details>
         <button id="submit" type="submit">Generate audio</button>
@@ -142,6 +142,10 @@
         </ul>
       </div>
       <audio id="player" controls></audio>
+      <section id="recordings-section">
+        <h2>Recordings</h2>
+        <div id="recordings-list"><p id="recordings-empty">No recordings yet.</p></div>
+      </section>
     </main>
     <script>
       const form = document.getElementById('read-form');
@@ -380,6 +384,7 @@
           showProgress(false);
           statusEl.textContent = 'Done. Tap play if audio does not autoplay.';
           refreshUsage();
+          refreshRecordings();
         } catch (error) {
           showProgress(false);
           statusEl.textContent = error.message || 'Failed to generate audio.';
@@ -387,6 +392,52 @@
           submitButton.disabled = false;
         }
       });
+
+      // --- Recordings ---
+      const recordingsList = document.getElementById('recordings-list');
+
+      function fmtBytes(n) {
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+        return `${(n / 1024 / 1024).toFixed(1)} MB`;
+      }
+      function fmtDate(iso) {
+        if (!iso) return '';
+        return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+      }
+      function fmtDuration(chars) {
+        const mins = Math.round(chars / 750);
+        return mins < 1 ? '<1 min' : `~${mins} min`;
+      }
+
+      async function deleteRecording(name) {
+        if (!confirm(`Delete "${name}"?`)) return;
+        const resp = await fetch(`/api/recordings/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (resp.ok) refreshRecordings();
+        else alert('Delete failed');
+      }
+
+      async function refreshRecordings() {
+        try {
+          const data = await fetch('/api/recordings').then(r => r.json());
+          if (!Array.isArray(data) || data.length === 0) {
+            recordingsList.innerHTML = '<p id="recordings-empty">No recordings yet.</p>';
+            return;
+          }
+          recordingsList.innerHTML = data.map(r => `
+            <div class="recording-item">
+              <div class="recording-title" title="${r.title}">${r.title}</div>
+              <div class="recording-meta">${r.voice} &nbsp;·&nbsp; ${r.chars.toLocaleString()} chars (${fmtDuration(r.chars)}) &nbsp;·&nbsp; ${fmtBytes(r.sizeBytes)} &nbsp;·&nbsp; ${fmtDate(r.createdAt)}</div>
+              <div class="recording-actions">
+                <audio controls src="/api/recordings/${encodeURIComponent(r.name)}/audio" preload="none"></audio>
+                <button class="btn-delete" onclick="deleteRecording('${r.name}')">Delete</button>
+              </div>
+            </div>`).join('');
+        } catch {
+          // silently fail — recordings section is non-critical
+        }
+      }
+      refreshRecordings();
     </script>
   </body>
 </html>
