@@ -245,6 +245,13 @@ const readLimiter = rateLimit({
   legacyHeaders: false
 });
 
+const previewLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
 const staticLimiter = rateLimit({
   windowMs: 60_000,
   max: 120,
@@ -265,6 +272,41 @@ app.get('/api/me', (req: Request, res: Response) => {
     principalName: req.header('x-ms-client-principal-name') ?? null,
     principalIdp: req.header('x-ms-client-principal-idp') ?? null
   });
+});
+
+interface PreviewResult {
+  chars: number;
+  truncated: boolean;
+  title: string | null;
+}
+
+app.post('/api/preview', previewLimiter, async (req: Request, res: Response) => {
+  const { url } = req.body as { url?: string };
+  if (!url) {
+    res.status(400).json({ error: 'url is required' });
+    return;
+  }
+  try {
+    const parsedUrl = await validateExternalUrl(url);
+    const { html, finalUrl } = await fetchArticleHtml(parsedUrl);
+    const dom = new JSDOM(html, { url: finalUrl.toString() });
+    const reader = new Readability(dom.window.document);
+    const article = reader.parse();
+    const rawText = (article?.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const result: PreviewResult = {
+      chars: Math.min(rawText.length, maxCharacters),
+      truncated: rawText.length > maxCharacters,
+      title: article?.title ?? null
+    };
+    res.json(result);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+    console.error('[api/preview error]', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 type ProgressStage = 'validating' | 'fetching' | 'extracting' | 'synthesizing' | 'done';
