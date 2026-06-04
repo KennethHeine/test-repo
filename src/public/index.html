@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Article to Speech</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; background: #f8fafc; }
+      main { max-width: 640px; margin: 0 auto; padding: 1rem; }
+      h1 { font-size: 1.5rem; }
+      form { display: grid; gap: 0.75rem; }
+      input, select, button { font-size: 1rem; padding: 0.65rem; border-radius: 0.5rem; border: 1px solid #cbd5e1; }
+      button { background: #2563eb; color: #fff; border: 0; }
+      button:disabled { opacity: 0.6; }
+      #status { min-height: 1.4rem; color: #1e293b; }
+      audio { width: 100%; margin-top: 0.75rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Article to Speech</h1>
+      <p>Paste an article URL and generate audio.</p>
+      <form id="read-form">
+        <label>
+          Article URL
+          <input id="url" name="url" type="url" placeholder="https://example.com/article" required />
+        </label>
+        <label>
+          Voice
+          <select id="voice" name="voice">
+            <option value="en-US-JennyNeural">en-US-JennyNeural</option>
+            <option value="en-US-GuyNeural">en-US-GuyNeural</option>
+            <option value="nb-NO-PernilleNeural">nb-NO-PernilleNeural</option>
+          </select>
+        </label>
+        <button id="submit" type="submit">Generate audio</button>
+      </form>
+      <p id="status"></p>
+      <audio id="player" controls></audio>
+    </main>
+    <script>
+      const form = document.getElementById('read-form');
+      const statusEl = document.getElementById('status');
+      const player = document.getElementById('player');
+      const submitButton = document.getElementById('submit');
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        statusEl.textContent = 'Generating...';
+        submitButton.disabled = true;
+
+        const formData = new FormData(form);
+        const payload = {
+          url: formData.get('url'),
+          voice: formData.get('voice'),
+          language: 'en'
+        };
+
+        try {
+          const response = await fetch('/api/read', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.error || `Request failed: ${response.status}`);
+          }
+
+          const blob = await response.blob();
+          player.src = URL.createObjectURL(blob);
+          player.play().catch(() => {});
+          statusEl.textContent = 'Done. Tap play if audio does not autoplay.';
+        } catch (error) {
+          statusEl.textContent = error.message || 'Failed to generate audio.';
+        } finally {
+          submitButton.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
