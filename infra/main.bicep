@@ -11,9 +11,6 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: containerAppEnvName
   location: location
   properties: {
-    appLogsConfiguration: {
-      destination: 'none'
-    }
     zoneRedundant: false
   }
 }
