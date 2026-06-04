@@ -42,6 +42,10 @@ jobs:
             # placeholder. On first deploy the app does not exist yet, so we omit the
             # image parameter and let the Bicep default (public placeholder) apply.
             CONTAINER_APP_NAME=$(jq -r '.parameters.containerAppName.value' infra/main.parameters.json)
+            if [ -z "$CONTAINER_APP_NAME" ] || [ "$CONTAINER_APP_NAME" = "null" ]; then
+              echo "Could not read containerAppName from infra/main.parameters.json" >&2
+              exit 1
+            fi
             IMAGE_ARGS=()
             currentImage=$(az containerapp show \
               --name "$CONTAINER_APP_NAME" \
