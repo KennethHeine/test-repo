@@ -57,8 +57,10 @@ The same Node.js/TypeScript container serves static frontend files and API route
 - RBAC assignment:
   - Container App managed identity gets `Cognitive Services Speech User` on Speech resource
 - Built-in Container Apps authentication (Easy Auth) with Microsoft Entra ID:
+  - Entra app registration + service principal created via the Microsoft Graph Bicep extension
+  - secret-less: Container App managed identity federated to the app registration
   - unauthenticated requests redirected to login
-  - tenant restricted via `--tenant-id`
+  - single tenant (`signInAudience: AzureADMyOrg`)
 
 ## App behavior
 
@@ -116,20 +118,27 @@ The infra workflow deploys:
 - Container App (single container, ingress, scaling, managed identity)
 - Speech resource (F0 + custom subdomain)
 - Speech RBAC role assignment
-- Easy Auth enablement + Entra provider setup through Azure CLI
+- Entra ID application + service principal for built-in auth, created declaratively
+  via the Microsoft Graph Bicep extension
+- Easy Auth (built-in authentication) configured declaratively in Bicep
 
-### Entra app registration requirement for built-in auth
+### Built-in auth (no secrets required)
 
-Create a single-tenant Entra app registration and add its credentials as repository secrets:
+The Entra ID **app registration and service principal are created automatically** by
+`infra/main.bicep` using the Microsoft Graph Bicep extension (`infra/bicepconfig.json`).
+You do **not** need to create an app registration by hand or add any
+`ENTRA_AUTH_CLIENT_ID` / `ENTRA_AUTH_CLIENT_SECRET` repository secrets.
 
-- `ENTRA_AUTH_CLIENT_ID`
-- `ENTRA_AUTH_CLIENT_SECRET`
+Instead of a client secret, the Container App's **system-assigned managed identity** is
+registered as a **federated identity credential** on the app registration, so Easy Auth
+authenticates secret-free. The redirect URI
+(`https://<container-app-fqdn>/.auth/login/aad/callback`) is set automatically from the
+Container App FQDN.
 
-Set redirect URI to:
-
-`https://<container-app-fqdn>/.auth/login/aad/callback`
-
-The infra workflow prints the correct FQDN after deployment.
+> **Prerequisite:** the deployment service principal (`AZURE_CLIENT_ID`) must have
+> permission to create Entra applications/service principals (e.g. the Graph
+> `Application.ReadWrite.OwnedBy` app role, or an equivalent directory role). This
+> repository's service principal already has these rights.
 
 ### GitHub Actions workflows
 
@@ -141,7 +150,8 @@ The infra workflow prints the correct FQDN after deployment.
   - Re-runs are **idempotent on the image**: if the Container App already exists, the
     workflow preserves its current image instead of resetting it to the placeholder
   - Assigns Speech RBAC role to managed identity
-  - Enables Container App built-in auth and configures Microsoft provider
+  - Built-in auth (Entra app + service principal + Easy Auth) is provisioned
+    declaratively by the Bicep template — no CLI auth step, no auth secrets
 - `deploy-app.yml`
   - Builds and pushes container image to `ghcr.io`
   - Updates the Container App image to the freshly built tag

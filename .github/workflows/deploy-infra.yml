@@ -71,12 +71,14 @@ jobs:
             containerAppPrincipalId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.containerAppPrincipalId.value -o tsv)
             speechResourceId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.speechResourceId.value -o tsv)
             speechEndpoint=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.speechEndpoint.value -o tsv)
+            authAppClientId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.authAppClientId.value -o tsv)
 
             echo "containerAppName=$containerAppName" >> "$GITHUB_OUTPUT"
             echo "containerAppFqdn=$containerAppFqdn" >> "$GITHUB_OUTPUT"
             echo "containerAppPrincipalId=$containerAppPrincipalId" >> "$GITHUB_OUTPUT"
             echo "speechResourceId=$speechResourceId" >> "$GITHUB_OUTPUT"
             echo "speechEndpoint=$speechEndpoint" >> "$GITHUB_OUTPUT"
+            echo "authAppClientId=$authAppClientId" >> "$GITHUB_OUTPUT"
 
       - name: Assign Speech RBAC role to Container App identity
         uses: azure/cli@v2
@@ -100,33 +102,9 @@ jobs:
               echo "Role assignment already exists."
             fi
 
-      - name: Configure Container App built-in auth (Entra single-tenant)
-        uses: azure/cli@v2
-        env:
-          ENTRA_AUTH_CLIENT_ID: ${{ secrets.ENTRA_AUTH_CLIENT_ID }}
-          ENTRA_AUTH_CLIENT_SECRET: ${{ secrets.ENTRA_AUTH_CLIENT_SECRET }}
-        with:
-          inlineScript: |
-            set -euo pipefail
-
-            if [ -z "${ENTRA_AUTH_CLIENT_ID:-}" ] || [ -z "${ENTRA_AUTH_CLIENT_SECRET:-}" ]; then
-              echo "Missing ENTRA_AUTH_CLIENT_ID or ENTRA_AUTH_CLIENT_SECRET repository secret."
-              exit 1
-            fi
-
-            az containerapp auth update \
-              --name "${{ steps.deploy.outputs.containerAppName }}" \
-              --resource-group "$RESOURCE_GROUP" \
-              --enabled true \
-              --unauthenticated-client-action RedirectToLoginPage
-
-            az containerapp auth microsoft update \
-              --name "${{ steps.deploy.outputs.containerAppName }}" \
-              --resource-group "$RESOURCE_GROUP" \
-              --client-id "$ENTRA_AUTH_CLIENT_ID" \
-              --client-secret "$ENTRA_AUTH_CLIENT_SECRET" \
-              --tenant-id "${{ secrets.AZURE_TENANT_ID }}"
-
-            echo "Container App URL: https://${{ steps.deploy.outputs.containerAppFqdn }}"
-            echo "Add this redirect URI to the Entra app registration if needed:"
-            echo "https://${{ steps.deploy.outputs.containerAppFqdn }}/.auth/login/aad/callback"
+      - name: Auth configuration summary
+        run: |
+          echo "Container App URL: https://${{ steps.deploy.outputs.containerAppFqdn }}"
+          echo "Entra auth application (created by Bicep) client id: ${{ steps.deploy.outputs.authAppClientId }}"
+          echo "Built-in auth is configured declaratively in Bicep using the Container App"
+          echo "managed identity (federated credential) - no client secret required."
