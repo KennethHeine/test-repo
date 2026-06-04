@@ -13,6 +13,20 @@
       button { background: #2563eb; color: #fff; border: 0; }
       button:disabled { opacity: 0.6; }
       #status { min-height: 1.4rem; color: #1e293b; }
+      #progress { margin-top: 0.75rem; display: none; }
+      #progress.active { display: block; }
+      .progress-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; margin-bottom: 0.4rem; }
+      .progress-stage { font-weight: 600; color: #1e293b; }
+      .progress-percent { font-variant-numeric: tabular-nums; color: #475569; font-size: 0.9rem; }
+      .progress-track { height: 0.6rem; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
+      .progress-bar { height: 100%; width: 0%; background: #2563eb; border-radius: 999px; transition: width 0.25s ease; }
+      .progress-bar.indeterminate { width: 35% !important; animation: indeterminate 1.2s ease-in-out infinite; }
+      @keyframes indeterminate { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+      .progress-steps { display: flex; gap: 0.4rem; margin-top: 0.6rem; flex-wrap: wrap; }
+      .progress-steps li { list-style: none; font-size: 0.78rem; padding: 0.15rem 0.55rem; border-radius: 999px; background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
+      .progress-steps li.active { background: #dbeafe; color: #1e3a8a; border-color: #bfdbfe; }
+      .progress-steps li.done { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+      .progress-steps ul { margin: 0; padding: 0; }
       audio { width: 100%; margin-top: 0.75rem; }
       label { display: grid; gap: 0.35rem; }
       #voice-info { margin: 0.25rem 0 0; padding: 0.6rem 0.75rem; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 0.5rem; color: #1e3a8a; font-size: 0.9rem; }
@@ -90,6 +104,21 @@
         <button id="submit" type="submit">Generate audio</button>
       </form>
       <p id="status"></p>
+      <div id="progress" aria-live="polite">
+        <div class="progress-head">
+          <span class="progress-stage" id="progress-stage">Starting…</span>
+          <span class="progress-percent" id="progress-percent">0%</span>
+        </div>
+        <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress-track">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <ul class="progress-steps" id="progress-steps">
+          <li data-stage="validating">Validate URL</li>
+          <li data-stage="fetching">Fetch article</li>
+          <li data-stage="extracting">Extract text</li>
+          <li data-stage="synthesizing">Convert to speech</li>
+        </ul>
+      </div>
       <audio id="player" controls></audio>
     </main>
     <script>
@@ -99,6 +128,14 @@
       const submitButton = document.getElementById('submit');
       const voiceSelect = document.getElementById('voice');
       const voiceInfo = document.getElementById('voice-info');
+      const progressEl = document.getElementById('progress');
+      const progressBar = document.getElementById('progress-bar');
+      const progressTrack = document.getElementById('progress-track');
+      const progressStage = document.getElementById('progress-stage');
+      const progressPercent = document.getElementById('progress-percent');
+      const progressSteps = document.getElementById('progress-steps');
+
+      const STAGE_ORDER = ['validating', 'fetching', 'extracting', 'synthesizing', 'done'];
 
       function updateVoiceInfo() {
         const option = voiceSelect.options[voiceSelect.selectedIndex];
@@ -113,13 +150,80 @@
         }
       }
 
+      function showProgress(show) {
+        progressEl.classList.toggle('active', show);
+      }
+
+      function resetProgress() {
+        progressBar.style.width = '0%';
+        progressBar.classList.remove('indeterminate');
+        progressPercent.textContent = '0%';
+        progressStage.textContent = 'Starting…';
+        progressTrack.setAttribute('aria-valuenow', '0');
+        progressSteps.querySelectorAll('li').forEach((li) => li.classList.remove('active', 'done'));
+      }
+
+      function updateProgress(event) {
+        const percent = Math.round((event.progress ?? 0) * 100);
+        const currentIndex = STAGE_ORDER.indexOf(event.stage);
+
+        progressBar.classList.remove('indeterminate');
+        progressBar.style.width = percent + '%';
+        progressPercent.textContent = percent + '%';
+        progressTrack.setAttribute('aria-valuenow', String(percent));
+        if (event.message) {
+          progressStage.textContent = event.message;
+        }
+
+        progressSteps.querySelectorAll('li').forEach((li) => {
+          const stageIndex = STAGE_ORDER.indexOf(li.dataset.stage);
+          li.classList.toggle('active', li.dataset.stage === event.stage && event.stage !== 'done');
+          li.classList.toggle('done', stageIndex < currentIndex || event.stage === 'done');
+        });
+      }
+
+      // Parse a Server-Sent Events stream incrementally from a fetch response body.
+      async function* readSseStream(response) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let boundary;
+          while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+            const raw = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+
+            let eventName = 'message';
+            const dataLines = [];
+            for (const line of raw.split('\n')) {
+              if (line.startsWith('event:')) {
+                eventName = line.slice(6).trim();
+              } else if (line.startsWith('data:')) {
+                dataLines.push(line.slice(5).trim());
+              }
+            }
+            if (dataLines.length) {
+              yield { event: eventName, data: JSON.parse(dataLines.join('\n')) };
+            }
+          }
+        }
+      }
+
       voiceSelect.addEventListener('change', updateVoiceInfo);
       updateVoiceInfo();
 
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
-        statusEl.textContent = 'Generating...';
+        statusEl.textContent = '';
         submitButton.disabled = true;
+        player.removeAttribute('src');
+        resetProgress();
+        showProgress(true);
 
         const formData = new FormData(form);
         const voice = formData.get('voice');
@@ -132,20 +236,38 @@
         try {
           const response = await fetch('/api/read', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
             body: JSON.stringify(payload)
           });
 
-          if (!response.ok) {
+          if (!response.ok || !response.body) {
             const error = await response.json().catch(() => ({}));
             throw new Error(error.error || `Request failed: ${response.status}`);
           }
 
-          const blob = await response.blob();
-          player.src = URL.createObjectURL(blob);
-          player.play().catch(() => {});
+          let audioReceived = false;
+          for await (const message of readSseStream(response)) {
+            if (message.event === 'progress') {
+              updateProgress(message.data);
+            } else if (message.event === 'audio') {
+              const bytes = Uint8Array.from(atob(message.data.audio), (c) => c.charCodeAt(0));
+              const blob = new Blob([bytes], { type: message.data.contentType || 'audio/mpeg' });
+              player.src = URL.createObjectURL(blob);
+              player.play().catch(() => {});
+              audioReceived = true;
+            } else if (message.event === 'error') {
+              throw new Error(message.data.error || 'Failed to generate audio.');
+            }
+          }
+
+          if (!audioReceived) {
+            throw new Error('Audio stream ended unexpectedly.');
+          }
+
+          showProgress(false);
           statusEl.textContent = 'Done. Tap play if audio does not autoplay.';
         } catch (error) {
+          showProgress(false);
           statusEl.textContent = error.message || 'Failed to generate audio.';
         } finally {
           submitButton.disabled = false;
