@@ -52,6 +52,7 @@ The same Node.js/TypeScript container serves static frontend files and API route
   - HTTP scale rule for low traffic
   - system-assigned managed identity
 - One **Azure AI Speech** resource (`SpeechServices`, F0)
+  - deployed to **Sweden Central** by default (`speechLocation`) for HD (DragonHD) / MAI voice region support
   - custom subdomain endpoint
   - local key auth disabled (`disableLocalAuth: true`)
 - RBAC assignment (declarative in Bicep):
@@ -119,7 +120,7 @@ Required environment variables for TTS:
 
 - `SPEECH_ENDPOINT` (custom subdomain endpoint, e.g. `https://<name>.cognitiveservices.azure.com`)
 - `SPEECH_RESOURCE_ID` (full Azure resource ID of Speech resource)
-- `SPEECH_REGION` (Azure region of Speech resource, e.g. `norwayeast`)
+- `SPEECH_REGION` (Azure region of Speech resource, e.g. `swedencentral`)
 
 Optional:
 
@@ -141,7 +142,7 @@ The infra workflow deploys:
 
 - Container Apps environment
 - Container App (single container, ingress, scaling, managed identity)
-- Speech resource (F0 + custom subdomain)
+- Speech resource (F0 + custom subdomain, Sweden Central for HD/MAI voice region support)
 - Speech RBAC role assignment (`Cognitive Services Speech User` on the Speech
   resource for the Container App managed identity)
 - Entra ID application + service principal for built-in auth, created declaratively

@@ -362,9 +362,6 @@ function pickVoice(voice?: string, language?: string): string {
   if (voice?.trim()) {
     return voice.trim();
   }
-  if (language?.startsWith('nb')) {
-    return 'nb-NO-PernilleNeural';
-  }
   return defaultVoice;
 }
 

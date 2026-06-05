@@ -1,6 +1,8 @@
 extension microsoftGraphV1
 
 param location string = resourceGroup().location
+@description('Region for the Azure AI Speech resource. Sweden Central supports HD (DragonHD) voices.')
+param speechLocation string = 'swedencentral'
 param containerAppEnvName string = 'cae-articletts'
 param containerAppName string = 'ca-articletts'
 @description('Container image to deploy. Defaults to a public bootstrap placeholder so the Container App can be created before the real private GHCR image exists. The deploy-app workflow swaps in the real image.')
@@ -32,7 +34,7 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 
 resource speech 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   name: speechAccountName
-  location: location
+  location: speechLocation
   sku: {
     name: 'F0'
   }
