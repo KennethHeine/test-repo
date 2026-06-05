@@ -81,11 +81,11 @@
           Voice
           <select id="voice" name="voice">
             <optgroup label="English (US) — MAI">
-              <option value="en-US-MAI-Voice-1Neural"
+              <option value="en-US-Harper:MAI-Voice-2"
                 selected
                 data-recommended="true"
-                data-info="Microsoft AI MAI-Voice-1: highly natural, expressive English voice.">
-                en-US-MAI-Voice-1 (Recommended)
+                data-info="Microsoft AI MAI-Voice-2 (preview feature): highly natural, expressive English voice. Region-gated — needs a Speech resource in a region that supports MAI-Voice-2.">
+                en-US-MAI-Voice-2 (Recommended)
               </option>
             </optgroup>
             <optgroup label="English (US) — Standard neural">
@@ -108,13 +108,32 @@
                 en-US-Andrew (Multilingual)
               </option>
             </optgroup>
+            <optgroup label="English (US) — HD (DragonHD)">
+              <option value="en-US-Ava:DragonHDLatestNeural"
+                data-info="HD female voice — most lifelike quality. Higher cost. The current deployment uses F0; HD voices may require upgrading to Standard (S0) and an HD region (e.g. Sweden Central).">
+                en-US-Ava (HD)
+              </option>
+              <option value="en-US-Andrew:DragonHDLatestNeural"
+                data-info="HD male voice — most lifelike quality. Higher cost. The current deployment uses F0; HD voices may require upgrading to Standard (S0) and an HD region (e.g. Sweden Central).">
+                en-US-Andrew (HD)
+              </option>
+              <option value="en-US-Emma:DragonHDLatestNeural"
+                data-info="HD female voice — warm, expressive. Higher cost. The current deployment uses F0; HD voices may require upgrading to Standard (S0) and an HD region (e.g. Sweden Central).">
+                en-US-Emma (HD)
+              </option>
+              <option value="en-US-Brian:DragonHDLatestNeural"
+                data-info="HD male voice — natural, conversational. Higher cost. The current deployment uses F0; HD voices may require upgrading to Standard (S0) and an HD region (e.g. Sweden Central).">
+                en-US-Brian (HD)
+              </option>
+            </optgroup>
           </select>
         </label>
         <p id="voice-info"></p>
         <details class="voice-guide">
           <summary>Which voice should I pick?</summary>
           <ul>
-            <li><strong>Most natural:</strong> <strong>MAI-Voice-1</strong> — Microsoft AI's expressive English voice (default).</li>
+            <li><strong>Most natural:</strong> <strong>MAI-Voice-2</strong> — Microsoft AI's expressive English voice (default).</li>
+            <li><strong>Highest quality:</strong> <strong>HD (DragonHD)</strong> voices are the most lifelike, but cost more. The current deployment uses F0 — HD voices may require upgrading to Standard (S0) and an HD region (e.g. Sweden Central).</li>
             <li><strong>Best compatibility:</strong> <strong>Jenny</strong> and <strong>Guy</strong> (standard neural) work in every region — safe fallbacks.</li>
               <li><strong>Multiple languages in one article:</strong> pick a <strong>Multilingual</strong> voice — it pronounces foreign names and phrases more accurately.</li>
           </ul>
