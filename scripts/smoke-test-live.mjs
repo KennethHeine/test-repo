@@ -78,30 +78,20 @@ function acquireToken(clientId) {
 async function main() {
   console.log(`Live smoke test → ${BASE_URL}\n`);
 
-  // 1. Health endpoint is unauthenticated and must always work.
-  try {
-    const res = await fetch(`${BASE_URL}/health`);
-    const body = await res.json().catch(() => ({}));
-    if (res.status === 200 && body.ok === true) ok('GET /health', 'ok:true');
-    else fail('GET /health', `status ${res.status} body ${JSON.stringify(body)}`);
-  } catch (err) {
-    fail('GET /health', String(err));
-  }
-
-  // 2. Unauthenticated request to a protected page must be redirected to login
-  //    (proves Easy Auth is still enforced after the infra change).
+  // 1. Every route is behind Easy Auth, so an unauthenticated request must be
+  //    rejected/redirected. This proves auth is still enforced after deploys.
   try {
     const res = await fetch(`${BASE_URL}/`, { redirect: 'manual' });
     if (res.status === 302 || res.status === 401) {
-      ok('GET / (no token) redirected', `status ${res.status}`);
+      ok('GET / (no token) rejected', `status ${res.status}`);
     } else {
-      fail('GET / (no token) redirected', `expected 302/401, got ${res.status}`);
+      fail('GET / (no token) rejected', `expected 302/401, got ${res.status}`);
     }
   } catch (err) {
-    fail('GET / (no token) redirected', String(err));
+    fail('GET / (no token) rejected', String(err));
   }
 
-  // Acquire a token as the current user.
+  // 2. Acquire a token as the current az-logged-in user.
   let token;
   try {
     const clientId = discoverClientId();
@@ -118,7 +108,17 @@ async function main() {
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
-  // 3. /api/me must return the caller identity from the Easy Auth headers.
+  // 3. /health (also behind Easy Auth) must return { ok: true } with a token.
+  try {
+    const res = await fetch(`${BASE_URL}/health`, { headers: authHeaders });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 200 && body.ok === true) ok('GET /health (token)', 'ok:true');
+    else fail('GET /health (token)', `status ${res.status} body ${JSON.stringify(body)}`);
+  } catch (err) {
+    fail('GET /health (token)', String(err));
+  }
+
+  // 4. /api/me must return the caller identity from the Easy Auth headers.
   try {
     const res = await fetch(`${BASE_URL}/api/me`, { headers: authHeaders });
     const body = await res.json().catch(() => ({}));
