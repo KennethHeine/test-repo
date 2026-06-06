@@ -20,6 +20,16 @@ param authAppDisplayName string = 'ca-articletts-auth'
 @description('Unique name (tenant-wide) for the auth Entra application. Used for idempotent redeployments.')
 param authAppUniqueName string = 'ca-articletts-auth-${uniqueString(subscription().id, resourceGroup().id)}'
 
+// First-party Azure CLI public client id. Pre-authorized on the auth app below so
+// `az account get-access-token --scope "<authAppClientId>/.default"` can mint a
+// token for the app non-interactively (no consent prompt) — used by the live
+// smoke test (npm run test:live). See README "Testing the live deployment".
+var azureCliClientId = '04b07795-8ddb-461a-bbee-02f9e1bf7b46'
+
+// Stable id for the app's user_impersonation delegated scope. Hardcoded so the
+// scope (and the CLI pre-authorization that references it) survives redeployments.
+var authAppUserImpersonationScopeId = '2aeb7e7b-1d26-430f-b8a6-28018fb42952'
+
 // OpenID Connect issuer for this tenant. Also used as the issuer that the federated
 // identity credential trusts so the Container App managed identity can act as the
 // auth application without any client secret.
@@ -237,6 +247,33 @@ resource authApp 'Microsoft.Graph/applications@v1.0' = {
     implicitGrantSettings: {
       enableIdTokenIssuance: true
     }
+  }
+  // Expose a delegated scope and pre-authorize the Azure CLI so a developer can
+  // mint a v2 access token for this app non-interactively and call the
+  // Easy-Auth-protected API. requestedAccessTokenVersion: 2 makes the token's
+  // `iss`/`aud` match the v2 issuer Easy Auth validates against.
+  api: {
+    requestedAccessTokenVersion: 2
+    oauth2PermissionScopes: [
+      {
+        id: authAppUserImpersonationScopeId
+        value: 'user_impersonation'
+        type: 'User'
+        isEnabled: true
+        adminConsentDisplayName: 'Access Article-to-Speech'
+        adminConsentDescription: 'Allow the application to access Article-to-Speech on behalf of the signed-in user.'
+        userConsentDisplayName: 'Access Article-to-Speech'
+        userConsentDescription: 'Allow the application to access Article-to-Speech on your behalf.'
+      }
+    ]
+    preAuthorizedApplications: [
+      {
+        appId: azureCliClientId
+        delegatedPermissionIds: [
+          authAppUserImpersonationScopeId
+        ]
+      }
+    ]
   }
   requiredResourceAccess: [
     {

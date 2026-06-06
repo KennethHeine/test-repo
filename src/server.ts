@@ -44,6 +44,17 @@ const speechRegion = process.env.SPEECH_REGION;
 const CHUNK_SIZE = 4_500;
 const maxCharacters = Number(process.env.MAX_ARTICLE_CHARS ?? 50_000);
 const defaultVoice = process.env.DEFAULT_VOICE ?? 'en-US-JennyNeural';
+// MP3 format used by both synthesis paths. The string form is the REST
+// `X-Microsoft-OutputFormat` header equivalent of the SDK enum
+// `Audio16Khz32KBitRateMonoMp3`, so SDK and REST chunks concatenate cleanly.
+const REST_OUTPUT_FORMAT = 'audio-16khz-32kbitrate-mono-mp3';
+// MAI-Voice-2 is preview and **REST-API only** — it intermittently fails with
+// error 1007 over the Speech SDK WebSocket path, so those voices are routed to
+// the REST endpoint instead. See AGENTS.md "MAI voices".
+const REST_SYNTHESIS_TIMEOUT_MS = 180_000;
+// REST retries: the F0 tier can transiently throttle bursts with 400/429/5xx.
+const REST_MAX_ATTEMPTS = 3;
+const REST_RETRY_BASE_DELAY_MS = 600;
 
 // ---------------------------------------------------------------------------
 // Monthly character usage — persisted in Azure Table Storage.
@@ -383,6 +394,115 @@ async function createSpeechConfig(): Promise<sdk.SpeechConfig> {
 }
 
 async function synthesizeSpeech(
+  text: string,
+  voiceName: string,
+  onProgress?: (fraction: number) => void
+): Promise<Buffer> {
+  if (isRestOnlyVoice(voiceName)) {
+    return synthesizeSpeechRest(text, voiceName);
+  }
+  return synthesizeSpeechSdk(text, voiceName, onProgress);
+}
+
+// MAI-Voice-2 voices (e.g. `en-US-Harper:MAI-Voice-2`) are REST-only.
+function isRestOnlyVoice(voiceName: string): boolean {
+  return /:MAI-Voice-2$/i.test(voiceName.trim());
+}
+
+// Derives the BCP-47 locale (e.g. `es-MX`) from a voice id like
+// `es-MX-Valeria:MAI-Voice-2`, used for the SSML `xml:lang` attribute so
+// multilingual voices render in the correct language. Falls back to `en-US`.
+function voiceLocale(voiceName: string): string {
+  const match = voiceName.trim().match(/^([a-z]{2,3}-[A-Za-z0-9]+)/);
+  return match ? match[1] : 'en-US';
+}
+
+// REST synthesis path for voices that aren't supported over the SDK WebSocket
+// (currently MAI-Voice-2). Sends SSML to the regional cognitiveservices/v1
+// endpoint authenticated with a Microsoft Entra token in the Speech-specific
+// `aad#<resourceId>#<token>` form (plain bearer is rejected with 401).
+//
+// The F0 (free) tier rate-limits bursts and can transiently answer with 400/429
+// even for valid voices, so failures are retried with backoff. A 400 that
+// persists across all attempts is treated as an unavailable voice (HTTP 422).
+async function synthesizeSpeechRest(text: string, voiceName: string): Promise<Buffer> {
+  if (!speechResourceId || !speechRegion) {
+    throw new Error('SPEECH_RESOURCE_ID and SPEECH_REGION must be configured');
+  }
+
+  const token = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  if (!token?.token) {
+    throw new Error('Could not acquire Azure AI Speech access token');
+  }
+
+  const url = `https://${speechRegion}.tts.speech.microsoft.com/cognitiveservices/v1`;
+  const locale = voiceLocale(voiceName);
+  const ssml =
+    `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
+    `xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="${escapeXml(locale)}">` +
+    `<voice name="${escapeXml(voiceName)}">${escapeXml(text)}</voice></speak>`;
+
+  let lastStatus = 0;
+  let lastBody = '';
+  for (let attempt = 1; attempt <= REST_MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REST_SYNTHESIS_TIMEOUT_MS);
+    let response: globalThis.Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/ssml+xml',
+          'X-Microsoft-OutputFormat': REST_OUTPUT_FORMAT,
+          Authorization: `Bearer aad#${speechResourceId}#${token.token}`,
+          'User-Agent': 'article-to-speech'
+        },
+        body: ssml,
+        signal: controller.signal
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`Speech synthesis timed out after ${REST_SYNTHESIS_TIMEOUT_MS}ms`);
+      }
+      throw new Error(`Speech synthesis request failed: ${String(error)}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (response.ok) {
+      return Buffer.from(await response.arrayBuffer());
+    }
+
+    lastStatus = response.status;
+    lastBody = await response.text().catch(() => '');
+
+    // Retry transient throttling/server errors (and 400, which the F0 tier can
+    // emit under burst load) until attempts are exhausted.
+    const retryable = response.status === 400 || response.status === 429 || response.status >= 500;
+    if (retryable && attempt < REST_MAX_ATTEMPTS) {
+      const retryAfter = Number(response.headers.get('retry-after'));
+      const delayMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : REST_RETRY_BASE_DELAY_MS * attempt;
+      log('warn', 'REST synthesis retry', { voiceName, attempt, status: response.status, delayMs });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+    break;
+  }
+
+  // A persistent 400 mirrors SDK error 1007 (unknown/unsupported voice) — surface
+  // it as a friendly 422 like the SDK path does.
+  if (lastStatus === 400) {
+    throw new HttpError(
+      422,
+      `Voice "${voiceName}" is not available in this region. Please choose a different voice.`
+    );
+  }
+  throw new Error(`Speech synthesis failed (HTTP ${lastStatus}): ${lastBody.slice(0, 200)}`);
+}
+
+async function synthesizeSpeechSdk(
   text: string,
   voiceName: string,
   onProgress?: (fraction: number) => void

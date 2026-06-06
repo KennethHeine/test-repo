@@ -89,13 +89,20 @@ there. HD/DragonHD voices (`*:DragonHDLatestNeural`) are **not** available on F0
 voices, verify availability first. SDK error 1007 = voice unavailable → already returns HTTP 422.
 
 ### MAI voices: MAI-Voice-1 (SDK) vs MAI-Voice-2 (REST only)
-swedencentral supports MAI voices, and **MAI-Voice-1** works on F0 through the Speech **SDK**
-(`speakSsmlAsync`) — the path this app uses. Prebuilt MAI-Voice-1 voice IDs use the form
-`en-us-Iris:MAI-Voice-1` (lowercase `en-us`). The app ships these as its primary voices.
-**MAI-Voice-2** is documented as **REST-API only** (`POST .../cognitiveservices/v1`). Through the
-SDK's WebSocket path it is unreliable: it intermittently returns error **1007** (→ HTTP 422), so
-do **not** wire MAI-Voice-2 into the SDK synthesis path. To offer MAI-Voice-2, add a separate REST
-code path with an AAD `Authorization: Bearer` token.
+swedencentral supports MAI voices. The app uses a **hybrid synthesis dispatcher** in
+`synthesizeSpeech()`:
+- **MAI-Voice-1** (e.g. `en-us-Iris:MAI-Voice-1`, lowercase `en-us`) works on F0 through the Speech
+  **SDK** (`speakSsmlAsync`) → handled by `synthesizeSpeechSdk()`.
+- **MAI-Voice-2** (e.g. `en-US-Harper:MAI-Voice-2`) is **REST-API only**. Over the SDK WebSocket it
+  intermittently returns error **1007** (→ HTTP 422), so `isRestOnlyVoice()` (matches `:MAI-Voice-2`)
+  routes it to `synthesizeSpeechRest()` instead. **`en-US-Harper:MAI-Voice-2` is the app default.**
+
+`synthesizeSpeechRest()` POSTs SSML to `https://<region>.tts.speech.microsoft.com/cognitiveservices/v1`
+with `Authorization: Bearer aad#<resourceId>#<token>` (plain bearer → 401), derives `xml:lang` from the
+voice locale via `voiceLocale()`, and **retries** transient `400`/`429`/`5xx` (the F0 tier throttles
+bursts; a persistent `400` is surfaced as HTTP 422 = unavailable voice). Verified-reliable MAI-Voice-2
+IDs: Harper/Olivia/Ethan (en-US) plus es-MX-Valeria, fr-FR-Soleil, de-DE-Mia, pt-BR-Luana, it-IT-Rosa,
+zh-CN-Mei, hi-IN-Priya. `ko-KR-Hana:MAI-Voice-2` is **not** available on this resource.
 
 ### `disableLocalAuth: true` on Speech resource
 Subscription key auth is disabled. Only AAD tokens work. Never switch to key-based auth.
@@ -129,6 +136,31 @@ Infra redeploys are idempotent: the workflow preserves the current container ima
 
 > After an infra redeploy that creates a **new Speech resource**, the local user's RBAC is reset.
 > Re-run the RBAC assignment: `az role assignment create --role "f2dc8367-1007-4938-bd23-fe263f013447" --assignee <your-upn> --scope <speech-resource-id>`
+
+---
+
+## Testing the live deployment (Easy Auth)
+
+The live app is behind Easy Auth (Entra). To test it as the current user without a secret:
+
+```bash
+az login
+npm run test:live   # scripts/smoke-test-live.mjs
+```
+
+How auth works for tests: `infra/main.bicep` **pre-authorizes the Azure CLI** public client
+(`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) on the auth app via `api.preAuthorizedApplications`, exposes a
+`user_impersonation` scope (stable id `authAppUserImpersonationScopeId`), and sets
+`requestedAccessTokenVersion: 2` so the token's `iss`/`aud` match the v2 issuer + `allowedAudiences`
+(the app's `appId`) that Easy Auth validates. The script then runs:
+`az account get-access-token --scope "<authAppClientId>/.default"` and calls the API with
+`Authorization: Bearer <token>`.
+
+The smoke test checks `/health` (200), unauthenticated `GET /` (must still be 302/401 → auth intact),
+`/api/me` (200 + identity), and `/api/preview` (200). `SMOKE_TEST_READ=1` also runs a billable
+`/api/read`. **If `az account get-access-token` returns `consent_required` (AADSTS65001), the Bicep
+pre-auth has not been deployed yet — deploy infra first.** This change is additive and does not alter
+Easy Auth validation; after deploying, confirm unauthenticated `GET /` is still redirected.
 
 ---
 

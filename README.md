@@ -215,3 +215,92 @@ steps:
       tenant-id: ${{ secrets.AZURE_TENANT_ID }}
       subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 ```
+
+## Voices: MAI-Voice-1 vs MAI-Voice-2
+
+The app offers Microsoft AI **MAI** voices alongside standard/HD neural voices.
+The two MAI generations reach the service through **different protocols**, so the
+app routes them accordingly:
+
+| Generation | Example voice id | Protocol | How the app calls it |
+|---|---|---|---|
+| **MAI-Voice-2** (newest, default) | `en-US-Harper:MAI-Voice-2` | **REST only** | `synthesizeSpeechRest()` → `POST https://<region>.tts.speech.microsoft.com/cognitiveservices/v1` |
+| **MAI-Voice-1** | `en-us-Iris:MAI-Voice-1` | Speech SDK | `synthesizeSpeechSdk()` (`speakSsmlAsync`) |
+
+MAI-Voice-2 is **not available over the Speech SDK WebSocket** — it fails with
+error `1007` / HTTP 422. `synthesizeSpeech()` therefore dispatches any
+`*:MAI-Voice-2` voice to the REST path and everything else to the SDK path. The
+REST call authenticates with a Microsoft Entra token in the Speech-specific
+`Authorization: Bearer aad#<resourceId>#<token>` form (a plain bearer token is
+rejected with 401) and retries transient `400`/`429`/`5xx` responses, which the
+F0 (free) tier can emit under burst load.
+
+The default voice is **`en-US-Harper:MAI-Voice-2`**. The frontend also exposes
+MAI-Voice-2 voices for Spanish, French, German, Portuguese, Italian, Chinese and
+Hindi.
+
+## Testing the live deployment
+
+The live app is protected by **Easy Auth (Microsoft Entra ID)**, so anonymous
+requests to protected routes are redirected to login. To test it as **yourself**
+(no client secret, no service principal), the auth app **pre-authorizes the
+Azure CLI** so you can mint a Microsoft Entra access token for the app with the
+Azure CLI and call the API with it.
+
+This is wired up declaratively in `infra/main.bicep`: the auth app exposes a
+`user_impersonation` delegated scope, sets `requestedAccessTokenVersion: 2` (so
+the token's issuer/audience match what Easy Auth validates), and lists the Azure
+CLI first-party client (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) under
+`preAuthorizedApplications` so no consent prompt is required.
+
+### Run the smoke test
+
+```bash
+az login
+npm run test:live
+```
+
+`npm run test:live` runs `scripts/smoke-test-live.mjs`, which:
+
+1. `GET /health` — unauthenticated, must return `{ ok: true }`.
+2. `GET /` **without** a token — must be redirected (`302`/`401`), proving Easy
+   Auth is still enforced.
+3. Discovers the auth app client id (`az containerapp auth show`) and mints a
+   user token: `az account get-access-token --scope "<clientId>/.default"`.
+4. `GET /api/me` with the token — must return your identity from the Easy Auth
+   `x-ms-client-principal-*` headers.
+5. `POST /api/preview` with the token — must extract the article (no TTS, no cost).
+6. *(opt-in)* `POST /api/read` end-to-end TTS — only runs when `SMOKE_TEST_READ=1`
+   (it is billable).
+
+The script exits non-zero if any check fails.
+
+### Manual token (one-off)
+
+```bash
+# Discover the auth app client id
+CLIENT_ID=$(az containerapp auth show -g rg-test-repo -n ca-articletts \
+  --query identityProviders.azureActiveDirectory.registration.clientId -o tsv)
+
+# Mint a user access token for the app
+TOKEN=$(az account get-access-token --scope "$CLIENT_ID/.default" --query accessToken -o tsv)
+
+# Call the protected API
+curl -s -H "Authorization: Bearer $TOKEN" \
+  https://<container-app-fqdn>/api/me
+```
+
+> If `az account get-access-token` reports `consent_required` (AADSTS65001), the
+> pre-authorization in `infra/main.bicep` has not been deployed yet — run
+> **Deploy Infrastructure** first.
+
+### Configuration overrides
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `APP_BASE_URL` | live Container App FQDN | Target a different deployment |
+| `AUTH_APP_CLIENT_ID` | auto-discovered via `az` | Skip discovery |
+| `RESOURCE_GROUP` / `CONTAINER_APP` | `rg-test-repo` / `ca-articletts` | Discovery source |
+| `SMOKE_TEST_READ` | unset | Set to `1` to run the billable `/api/read` test |
+| `SMOKE_TEST_VOICE` | `en-US-Harper:MAI-Voice-2` | Voice for the read test |
+| `SMOKE_TEST_URL` | `https://example.com` | Article URL for preview/read |

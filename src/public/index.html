@@ -80,12 +80,56 @@
         <label>
           Voice
           <select id="voice" name="voice">
-            <optgroup label="English (US) — MAI-Voice-1 (Microsoft AI)">
-              <option value="en-us-Iris:MAI-Voice-1"
+            <optgroup label="English (US) — MAI-Voice-2 (newest, multilingual)">
+              <option value="en-US-Harper:MAI-Voice-2"
                 selected
                 data-recommended="true"
+                data-info="Microsoft AI MAI-Voice-2 (preview): the newest, most natural multilingual voice — expressive female tone tuned for narration. Generated through the REST API (it isn't available over the Speech SDK).">
+                en-US-Harper — MAI-Voice-2 (Recommended)
+              </option>
+              <option value="en-US-Olivia:MAI-Voice-2"
+                data-info="Microsoft AI MAI-Voice-2 (preview): warm female voice, multilingual. REST API only.">
+                en-US-Olivia — MAI-Voice-2
+              </option>
+              <option value="en-US-Ethan:MAI-Voice-2"
+                data-info="Microsoft AI MAI-Voice-2 (preview): natural male voice, multilingual. REST API only.">
+                en-US-Ethan — MAI-Voice-2
+              </option>
+            </optgroup>
+            <optgroup label="Other languages — MAI-Voice-2">
+              <option value="es-MX-Valeria:MAI-Voice-2"
+                data-info="Microsoft AI MAI-Voice-2 (preview): Spanish (Mexico) female voice. REST API only.">
+                es-MX-Valeria — MAI-Voice-2
+              </option>
+              <option value="fr-FR-Soleil:MAI-Voice-2"
+                data-info="Microsoft AI MAI-Voice-2 (preview): French (France) female voice. REST API only.">
+                fr-FR-Soleil — MAI-Voice-2
+              </option>
+              <option value="de-DE-Mia:MAI-Voice-2"
+                data-info="Microsoft AI MAI-Voice-2 (preview): German female voice. REST API only.">
+                de-DE-Mia — MAI-Voice-2
+              </option>
+              <option value="pt-BR-Luana:MAI-Voice-2"
+                data-info="Microsoft AI MAI-Voice-2 (preview): Portuguese (Brazil) female voice. REST API only.">
+                pt-BR-Luana — MAI-Voice-2
+              </option>
+              <option value="it-IT-Rosa:MAI-Voice-2"
+                data-info="Microsoft AI MAI-Voice-2 (preview): Italian female voice. REST API only.">
+                it-IT-Rosa — MAI-Voice-2
+              </option>
+              <option value="zh-CN-Mei:MAI-Voice-2"
+                data-info="Microsoft AI MAI-Voice-2 (preview): Chinese (Mandarin) female voice. REST API only.">
+                zh-CN-Mei — MAI-Voice-2
+              </option>
+              <option value="hi-IN-Priya:MAI-Voice-2"
+                data-info="Microsoft AI MAI-Voice-2 (preview): Hindi female voice. REST API only.">
+                hi-IN-Priya — MAI-Voice-2
+              </option>
+            </optgroup>
+            <optgroup label="English (US) — MAI-Voice-1 (Microsoft AI)">
+              <option value="en-us-Iris:MAI-Voice-1"
                 data-info="Microsoft AI MAI-Voice-1 (preview): expressive female voice tuned for narration — ideal for articles. Generated through the Speech SDK, so it works on this Sweden Central F0 setup.">
-                en-US-Iris — MAI (Recommended)
+                en-US-Iris — MAI
               </option>
               <option value="en-us-June:MAI-Voice-1"
                 data-info="Microsoft AI MAI-Voice-1 (preview): warm female voice — conversational, customer-service and professional styles.">
@@ -152,8 +196,9 @@
         <details class="voice-guide">
           <summary>Which voice should I pick?</summary>
           <ul>
-            <li><strong>Most natural:</strong> <strong>MAI-Voice-1</strong> — Microsoft AI's expressive English voices (default: Iris). Generated with the Speech SDK, so they work on this Sweden Central F0 deployment.</li>
-            <li><strong>About MAI-Voice-2:</strong> the newer multilingual MAI-Voice-2 is currently <strong>REST-API only</strong> and isn't reliable through the Speech SDK this app uses, so it isn't offered here.</li>
+            <li><strong>Most natural:</strong> <strong>MAI-Voice-2</strong> — Microsoft AI's newest multilingual voices (default: Harper). Generated via the Speech REST API, with automatic retries for the F0 tier.</li>
+            <li><strong>Also great:</strong> <strong>MAI-Voice-1</strong> — Microsoft AI's expressive English voices (e.g. Iris). Generated with the Speech SDK.</li>
+            <li><strong>Other languages:</strong> the MAI-Voice-2 group includes Spanish, French, German, Portuguese, Italian, Chinese and Hindi voices.</li>
             <li><strong>Highest quality:</strong> <strong>HD (DragonHD)</strong> voices are the most lifelike, but cost more. The current deployment uses F0 — HD voices may require upgrading to Standard (S0) and an HD region (e.g. Sweden Central).</li>
             <li><strong>Best compatibility:</strong> <strong>Jenny</strong> and <strong>Guy</strong> (standard neural) work in every region — safe fallbacks.</li>
               <li><strong>Multiple languages in one article:</strong> pick a <strong>Multilingual</strong> voice — it pronounces foreign names and phrases more accurately.</li>
