@@ -12,6 +12,7 @@ param speechCustomSubdomain string = 'sp${take(uniqueString(resourceGroup().id, 
 param storageAccountName string = 'st${take(uniqueString(subscription().id, resourceGroup().id), 20)}'
 param maxReplicas int = 1
 param minReplicas int = 0
+param logAnalyticsWorkspaceName string = 'log-articletts'
 
 @description('Display name for the Entra ID application used by Container Apps built-in auth (Easy Auth).')
 param authAppDisplayName string = 'ca-articletts-auth'
@@ -24,11 +25,34 @@ param authAppUniqueName string = 'ca-articletts-auth-${uniqueString(subscription
 // auth application without any client secret.
 var entraIssuer = '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
 
+// ---------------------------------------------------------------------------
+// Log Analytics workspace — receives all container stdout/stderr and system
+// events so logs persist beyond container scale-to-zero and can be queried
+// via Azure Monitor / Log Analytics Logs blade.
+// ---------------------------------------------------------------------------
+resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+  name: logAnalyticsWorkspaceName
+  location: location
+  properties: {
+    sku: {
+      name: 'PerGB2018'
+    }
+    retentionInDays: 30
+  }
+}
+
 resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: containerAppEnvName
   location: location
   properties: {
     zoneRedundant: false
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: logAnalyticsWorkspace.properties.customerId
+        sharedKey: logAnalyticsWorkspace.listKeys().primarySharedKey
+      }
+    }
   }
 }
 
@@ -279,3 +303,5 @@ resource authConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
 
 output authAppClientId string = authApp.appId
 output authAppServicePrincipalId string = authServicePrincipal.id
+output logAnalyticsWorkspaceName string = logAnalyticsWorkspace.name
+output logAnalyticsWorkspaceId string = logAnalyticsWorkspace.id
