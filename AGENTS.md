@@ -88,6 +88,15 @@ The Speech resource is in **swedencentral** on the F0 (free) tier. Not all voice
 there. HD/DragonHD voices (`*:DragonHDLatestNeural`) are **not** available on F0. When adding
 voices, verify availability first. SDK error 1007 = voice unavailable → already returns HTTP 422.
 
+### MAI voices: MAI-Voice-1 (SDK) vs MAI-Voice-2 (REST only)
+swedencentral supports MAI voices, and **MAI-Voice-1** works on F0 through the Speech **SDK**
+(`speakSsmlAsync`) — the path this app uses. Prebuilt MAI-Voice-1 voice IDs use the form
+`en-us-Iris:MAI-Voice-1` (lowercase `en-us`). The app ships these as its primary voices.
+**MAI-Voice-2** is documented as **REST-API only** (`POST .../cognitiveservices/v1`). Through the
+SDK's WebSocket path it is unreliable: it intermittently returns error **1007** (→ HTTP 422), so
+do **not** wire MAI-Voice-2 into the SDK synthesis path. To offer MAI-Voice-2, add a separate REST
+code path with an AAD `Authorization: Bearer` token.
+
 ### `disableLocalAuth: true` on Speech resource
 Subscription key auth is disabled. Only AAD tokens work. Never switch to key-based auth.
 

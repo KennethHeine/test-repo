@@ -80,12 +80,32 @@
         <label>
           Voice
           <select id="voice" name="voice">
-            <optgroup label="English (US) — MAI">
-              <option value="en-US-Harper:MAI-Voice-2"
+            <optgroup label="English (US) — MAI-Voice-1 (Microsoft AI)">
+              <option value="en-us-Iris:MAI-Voice-1"
                 selected
                 data-recommended="true"
-                data-info="Microsoft AI MAI-Voice-2 (preview feature): highly natural, expressive English voice. Region-gated — needs a Speech resource in a region that supports MAI-Voice-2.">
-                en-US-MAI-Voice-2 (Recommended)
+                data-info="Microsoft AI MAI-Voice-1 (preview): expressive female voice tuned for narration — ideal for articles. Generated through the Speech SDK, so it works on this Sweden Central F0 setup.">
+                en-US-Iris — MAI (Recommended)
+              </option>
+              <option value="en-us-June:MAI-Voice-1"
+                data-info="Microsoft AI MAI-Voice-1 (preview): warm female voice — conversational, customer-service and professional styles.">
+                en-US-June — MAI
+              </option>
+              <option value="en-us-Jasper:MAI-Voice-1"
+                data-info="Microsoft AI MAI-Voice-1 (preview): expressive male voice — conversational and sales styles.">
+                en-US-Jasper — MAI
+              </option>
+              <option value="en-us-Grant:MAI-Voice-1"
+                data-info="Microsoft AI MAI-Voice-1 (preview): professional male voice — conversational and professional styles.">
+                en-US-Grant — MAI
+              </option>
+              <option value="en-us-Joy:MAI-Voice-1"
+                data-info="Microsoft AI MAI-Voice-1 (preview): friendly female voice for general conversation.">
+                en-US-Joy — MAI
+              </option>
+              <option value="en-us-Reed:MAI-Voice-1"
+                data-info="Microsoft AI MAI-Voice-1 (preview): natural male voice for general conversation.">
+                en-US-Reed — MAI
               </option>
             </optgroup>
             <optgroup label="English (US) — Standard neural">
@@ -132,7 +152,8 @@
         <details class="voice-guide">
           <summary>Which voice should I pick?</summary>
           <ul>
-            <li><strong>Most natural:</strong> <strong>MAI-Voice-2</strong> — Microsoft AI's expressive English voice (default).</li>
+            <li><strong>Most natural:</strong> <strong>MAI-Voice-1</strong> — Microsoft AI's expressive English voices (default: Iris). Generated with the Speech SDK, so they work on this Sweden Central F0 deployment.</li>
+            <li><strong>About MAI-Voice-2:</strong> the newer multilingual MAI-Voice-2 is currently <strong>REST-API only</strong> and isn't reliable through the Speech SDK this app uses, so it isn't offered here.</li>
             <li><strong>Highest quality:</strong> <strong>HD (DragonHD)</strong> voices are the most lifelike, but cost more. The current deployment uses F0 — HD voices may require upgrading to Standard (S0) and an HD region (e.g. Sweden Central).</li>
             <li><strong>Best compatibility:</strong> <strong>Jenny</strong> and <strong>Guy</strong> (standard neural) work in every region — safe fallbacks.</li>
               <li><strong>Multiple languages in one article:</strong> pick a <strong>Multilingual</strong> voice — it pronounces foreign names and phrases more accurately.</li>
@@ -275,11 +296,14 @@
       refreshUsage();
 
       // --- Pricing constants (Azure pay-as-you-go, US region) ---
-      const VOICE_PRICES = { standard: 15, hd: 22 }; // USD per 1M chars
+      const VOICE_PRICES = { standard: 15, hd: 22, mai: 22 }; // USD per 1M chars (mai = preview, est. as premium)
       const F0_FREE_CHARS = 500_000; // chars free per month on F0 tier
 
       function voicePriceTier(voice) {
-        return voice && voice.includes(':DragonHD') ? 'hd' : 'standard';
+        if (!voice) return 'standard';
+        if (voice.includes(':DragonHD')) return 'hd';
+        if (voice.includes(':MAI-Voice')) return 'mai';
+        return 'standard';
       }
 
       function formatCost(usd) {
@@ -298,7 +322,7 @@
         const tier = voicePriceTier(voiceSelect.value);
         const pricePerM = VOICE_PRICES[tier];
         const cost = (cachedPreviewChars / 1_000_000) * pricePerM;
-        const tierLabel = tier === 'hd' ? 'HD Neural' : 'Standard Neural';
+        const tierLabel = tier === 'hd' ? 'HD Neural' : tier === 'mai' ? 'MAI Neural' : 'Standard Neural';
         const freeNote = cachedPreviewChars <= F0_FREE_CHARS
           ? `covered by F0 free tier (500K chars/mo)`
           : `exceeds F0 free tier`;
