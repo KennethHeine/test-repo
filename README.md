@@ -247,11 +247,14 @@ requests to protected routes are redirected to login. To test it as **yourself**
 Azure CLI** so you can mint a Microsoft Entra access token for the app with the
 Azure CLI and call the API with it.
 
-This is wired up declaratively in `infra/main.bicep`: the auth app exposes a
-`user_impersonation` delegated scope, sets `requestedAccessTokenVersion: 2` (so
-the token's issuer/audience match what Easy Auth validates), and lists the Azure
-CLI first-party client (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) under
-`preAuthorizedApplications` so no consent prompt is required.
+This is wired up across `infra/main.bicep` and `.github/workflows/deploy-infra.yml`: the auth app
+exposes a `user_impersonation` delegated scope and sets `requestedAccessTokenVersion: 2` (so the
+token's issuer/audience match what Easy Auth validates), and the deploy workflow then **pre-authorizes
+the Azure CLI** first-party client (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) for that scope via an
+idempotent Microsoft Graph `PATCH` after the Bicep deploy. (The pre-authorization is applied in the
+workflow rather than directly in Bicep because the Microsoft Graph Bicep extension validates
+`preAuthorizedApplications` against scopes that don't exist yet when the scope is first created.) With
+the CLI pre-authorized, no consent prompt is required.
 
 ### Run the smoke test
 

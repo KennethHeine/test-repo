@@ -248,10 +248,13 @@ resource authApp 'Microsoft.Graph/applications@v1.0' = {
       enableIdTokenIssuance: true
     }
   }
-  // Expose a delegated scope and pre-authorize the Azure CLI so a developer can
-  // mint a v2 access token for this app non-interactively and call the
-  // Easy-Auth-protected API. requestedAccessTokenVersion: 2 makes the token's
-  // `iss`/`aud` match the v2 issuer Easy Auth validates against.
+  // Expose a delegated scope so a developer can mint a v2 access token for this
+  // app and call the Easy-Auth-protected API. requestedAccessTokenVersion: 2
+  // makes the token's `iss`/`aud` match the v2 issuer Easy Auth validates
+  // against. The Azure CLI is pre-authorized for this scope by an idempotent
+  // post-deploy Microsoft Graph PATCH in deploy-infra.yml — it cannot be set in
+  // this same resource because the Graph extension validates
+  // preAuthorizedApplications against scopes that do not exist yet on create.
   api: {
     requestedAccessTokenVersion: 2
     oauth2PermissionScopes: [
@@ -264,14 +267,6 @@ resource authApp 'Microsoft.Graph/applications@v1.0' = {
         adminConsentDescription: 'Allow the application to access Article-to-Speech on behalf of the signed-in user.'
         userConsentDisplayName: 'Access Article-to-Speech'
         userConsentDescription: 'Allow the application to access Article-to-Speech on your behalf.'
-      }
-    ]
-    preAuthorizedApplications: [
-      {
-        appId: azureCliClientId
-        delegatedPermissionIds: [
-          authAppUserImpersonationScopeId
-        ]
       }
     ]
   }
@@ -340,5 +335,7 @@ resource authConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
 
 output authAppClientId string = authApp.appId
 output authAppServicePrincipalId string = authServicePrincipal.id
+output authAppUserImpersonationScopeId string = authAppUserImpersonationScopeId
+output azureCliClientId string = azureCliClientId
 output logAnalyticsWorkspaceName string = logAnalyticsWorkspace.name
 output logAnalyticsWorkspaceId string = logAnalyticsWorkspace.id

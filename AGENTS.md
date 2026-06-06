@@ -148,11 +148,13 @@ az login
 npm run test:live   # scripts/smoke-test-live.mjs
 ```
 
-How auth works for tests: `infra/main.bicep` **pre-authorizes the Azure CLI** public client
-(`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) on the auth app via `api.preAuthorizedApplications`, exposes a
-`user_impersonation` scope (stable id `authAppUserImpersonationScopeId`), and sets
-`requestedAccessTokenVersion: 2` so the token's `iss`/`aud` match the v2 issuer + `allowedAudiences`
-(the app's `appId`) that Easy Auth validates. The script then runs:
+How auth works for tests: the auth app exposes a `user_impersonation` scope (stable id
+`authAppUserImpersonationScopeId`) and sets `requestedAccessTokenVersion: 2` in `infra/main.bicep`, and
+`deploy-infra.yml` then **pre-authorizes the Azure CLI** public client
+(`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) for that scope via an idempotent Microsoft Graph `PATCH` after
+the Bicep deploy (the Graph Bicep extension can't set `preAuthorizedApplications` in the same operation
+that first creates the scope). v2 tokens make the `iss`/`aud` match the v2 issuer + `allowedAudiences`
+(the app's `appId`) that Easy Auth validates. The script then runs
 `az account get-access-token --scope "<authAppClientId>/.default"` and calls the API with
 `Authorization: Bearer <token>`.
 

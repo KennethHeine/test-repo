@@ -70,11 +70,40 @@ jobs:
             containerAppFqdn=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.containerAppFqdn.value -o tsv)
             speechEndpoint=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.speechEndpoint.value -o tsv)
             authAppClientId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.authAppClientId.value -o tsv)
+            authScopeId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.authAppUserImpersonationScopeId.value -o tsv)
+            azureCliClientId=$(az deployment group show --resource-group "$RESOURCE_GROUP" --name "$DEPLOYMENT_NAME" --query properties.outputs.azureCliClientId.value -o tsv)
 
             echo "containerAppName=$containerAppName" >> "$GITHUB_OUTPUT"
             echo "containerAppFqdn=$containerAppFqdn" >> "$GITHUB_OUTPUT"
             echo "speechEndpoint=$speechEndpoint" >> "$GITHUB_OUTPUT"
             echo "authAppClientId=$authAppClientId" >> "$GITHUB_OUTPUT"
+            echo "authScopeId=$authScopeId" >> "$GITHUB_OUTPUT"
+            echo "azureCliClientId=$azureCliClientId" >> "$GITHUB_OUTPUT"
+
+      - name: Pre-authorize Azure CLI on the auth app
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            # The Microsoft Graph Bicep extension cannot set api.preAuthorizedApplications
+            # in the same operation that first creates the oauth2PermissionScope (Graph
+            # validates the permission id against scopes that don't exist yet). So the
+            # scope is created declaratively in Bicep and the Azure CLI pre-authorization
+            # is applied here via Graph, idempotently, after the scope exists. This lets
+            # `az account get-access-token --scope "<appId>/.default"` mint a user token
+            # for the app without an interactive consent prompt (used by npm run test:live).
+            APP_ID='${{ steps.deploy.outputs.authAppClientId }}'
+            CLI_ID='${{ steps.deploy.outputs.azureCliClientId }}'
+            SCOPE_ID='${{ steps.deploy.outputs.authScopeId }}'
+
+            echo "Pre-authorizing Azure CLI ($CLI_ID) for scope $SCOPE_ID on app $APP_ID"
+            az rest \
+              --method PATCH \
+              --url "https://graph.microsoft.com/v1.0/applications(appId='${APP_ID}')" \
+              --headers 'Content-Type=application/json' \
+              --body "{\"api\":{\"preAuthorizedApplications\":[{\"appId\":\"${CLI_ID}\",\"delegatedPermissionIds\":[\"${SCOPE_ID}\"]}]}}" \
+              --only-show-errors
+            echo "Azure CLI pre-authorization applied."
 
       - name: Auth configuration summary
         run: |
